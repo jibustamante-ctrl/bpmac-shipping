@@ -80,17 +80,9 @@ export default async function handler(req, res) {
     const comunaNorm = normalizeComuna(ciudad);
     const tarifa = TARIFAS[comunaNorm];
 
-    if (!tarifa) {
-      return res.status(200).json({
-        rates: [{
-          service_name: "Envío EPS — Consultar disponibilidad",
-          service_code: "EPS_CONSULTAR",
-          total_price: "0",
-          currency: "CLP",
-          description: "Tu comuna no está en nuestra tabla de fletes EPS. Contáctanos por WhatsApp para coordinar el envío."
-        }]
-      });
-    }
+if (!tarifa) {
+  return res.status(200).json({ rates: [] });
+}
 
     return res.status(200).json({
       rates: [{
