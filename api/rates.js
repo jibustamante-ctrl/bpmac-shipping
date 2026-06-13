@@ -98,9 +98,9 @@ export default async function handler(req, res) {
         service_code: "EPS_FLETE",
         total_price: String(tarifa * 100),
         currency: "CLP",
-        min_delivery_date: new Date(Date.now() + 3 * 86400000).toISOString(),
+        min_delivery_date: new Date(Date.now() + 4 * 86400000).toISOString(),
         max_delivery_date: new Date(Date.now() + 7 * 86400000).toISOString(),
-        description: "Envío especial planchas EPS. Precio fijo por comuna, incluye IVA."
+        description: "Precio fijo por comuna | Despacho por Transporte de Carga | IVA incluido."
       }]
     });
 
