@@ -49,7 +49,7 @@ const TARIFAS_EPS = {
   "VILLA ALEMANA": 193700, "VINA DEL MAR": 193700, "ZAPALLAR": 228300
 };
 
-// ─── ZONAS RM (despacho propio, excluye EPS) ──────────────────────────────────
+// ─── ZONAS RM ─────────────────────────────────────────────────────────────────
 const ZONA1 = [
   "SAN MIGUEL", "PEDRO AGUIRRE CERDA", "LO ESPEJO", "SAN JOAQUIN",
   "MACUL", "NUNOA", "PROVIDENCIA", "SANTIAGO", "ESTACION CENTRAL",
@@ -72,32 +72,35 @@ const ZONA3 = [
 // ─── TARIFAS RM (CLP neto, sin IVA) ──────────────────────────────────────────
 const TARIFAS_RM = {
   ZONA1: [
+    { hasta: 25000,    precio: 5990 },
     { hasta: 40000,    precio: 9990 },
-    { hasta: 100000,   precio: 15000 },
-    { hasta: 300000,   precio: 20000 },
-    { hasta: 900000,   precioPorKg: 2000 },
-    { hasta: 1800000,  precio: 80000 },
-    { hasta: Infinity, precioPorPallet: 80000 }
+    { hasta: 100000,   precio: 15990 },
+    { hasta: 300000,   precio: 24990 },
+    { hasta: 900000,   precio: 40990 },
+    { hasta: 1800000,  precio: 74990 },
+    { hasta: Infinity, precioPorPallet: 74990 }
   ],
   ZONA2: [
+    { hasta: 25000,    precio: 9990 },
     { hasta: 40000,    precio: 14990 },
-    { hasta: 100000,   precio: 20000 },
-    { hasta: 300000,   precio: 28000 },
-    { hasta: 900000,   precioPorKg: 2500 },
-    { hasta: 1800000,  precio: 100000 },
-    { hasta: Infinity, precioPorPallet: 80000 }
+    { hasta: 100000,   precio: 21990 },
+    { hasta: 300000,   precio: 31990 },
+    { hasta: 900000,   precio: 55990 },
+    { hasta: 1800000,  precio: 94990 },
+    { hasta: Infinity, precioPorPallet: 94990 }
   ],
   ZONA3: [
+    { hasta: 25000,    precio: 14990 },
     { hasta: 40000,    precio: 19990 },
-    { hasta: 100000,   precio: 28000 },
-    { hasta: 300000,   precio: 38000 },
-    { hasta: 900000,   precioPorKg: 3000 },
-    { hasta: 1800000,  precio: 120000 },
-    { hasta: Infinity, precioPorPallet: 80000 }
+    { hasta: 100000,   precio: 28990 },
+    { hasta: 300000,   precio: 39990 },
+    { hasta: 900000,   precio: 65990 },
+    { hasta: 1800000,  precio: 110990 },
+    { hasta: Infinity, precioPorPallet: 110990 }
   ]
 };
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
 function normalize(str) {
   return (str || "")
     .toUpperCase()
@@ -121,11 +124,9 @@ function getZona(comuna) {
 }
 
 function calcularTarifaRM(zona, pesoGramos) {
-  const pesoKg = pesoGramos / 1000;
   for (const tramo of TARIFAS_RM[zona]) {
     if (pesoGramos <= tramo.hasta) {
-      if (tramo.precio !== undefined)        return tramo.precio;
-      if (tramo.precioPorKg !== undefined)   return Math.round(pesoKg * tramo.precioPorKg);
+      if (tramo.precio !== undefined) return tramo.precio;
       if (tramo.precioPorPallet !== undefined) {
         const pallets = Math.ceil(pesoGramos / 1800000);
         return pallets * tramo.precioPorPallet;
@@ -136,13 +137,15 @@ function calcularTarifaRM(zona, pesoGramos) {
 }
 
 function descripcionRM(pesoGramos) {
+  if (pesoGramos <= 25000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
+  if (pesoGramos <= 40000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
   if (pesoGramos <= 300000)  return "Entrega en 2-3 días hábiles · Martes y Jueves";
   if (pesoGramos <= 900000)  return `½ pallet (${(pesoGramos/1000).toFixed(0)} kg) · Entrega coordinada`;
   if (pesoGramos <= 1800000) return "1 pallet completo · Entrega coordinada";
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
 }
 
-// ─── HANDLER ─────────────────────────────────────────────────────────────────
+// ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -157,7 +160,7 @@ export default async function handler(req, res) {
     const ciudad = destination.city || "";
     const comunaNorm = normalize(ciudad);
 
-    // ── CASO 1: Carrito con EPS → tarifas EPS ──────────────────────────────
+    // ── CASO 1: Carrito con EPS → tarifas EPS ────────────────────────────
     if (hasEPS(items)) {
       const tarifa = TARIFAS_EPS[comunaNorm];
       if (!tarifa) return res.status(200).json({ rates: [] });
@@ -174,7 +177,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ───────────────
+    // ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ─────────────
     const zona = getZona(ciudad);
     if (zona) {
       const pesoTotal = items.reduce((sum, i) => sum + ((i.grams || 0) * i.quantity), 0);
@@ -194,7 +197,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── CASO 3: Fuera de RM sin EPS → sin tarifa (FedEx/BlueExpress) ───────
+    // ── CASO 3: Fuera de RM sin EPS → FedEx/BlueExpress ──────────────────
     return res.status(200).json({ rates: [] });
 
   } catch (err) {
