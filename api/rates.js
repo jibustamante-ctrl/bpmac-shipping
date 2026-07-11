@@ -196,8 +196,8 @@ export default async function handler(req, res) {
           service_code: `BPMAC_RM_${zona}`,
           total_price: String(tarifa * 100),
           currency: "CLP",
-          min_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
-          max_delivery_date: new Date(Date.now() + 5 * 86400000).toISOString(),
+          min_delivery_date: new Date(Date.now() + 1 * 86400000).toISOString(),
+          max_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
           description: descripcionRM(pesoTotal)
         }]
       });
