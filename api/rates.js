@@ -70,34 +70,36 @@ const ZONA3 = [
   "PIRQUE"
 ];
 
-// ─── TARIFAS RM (CLP neto, sin IVA) ──────────────────────────────────────────
+// ─── TARIFAS RM (CLP neto, sin IVA) — actualizado 11-jul-2026 ────────────────
+// "base" es la tarifa del tramo "1 pallet". "extraPorPallet" es el cargo
+// POR CADA PALLET ADICIONAL sobre ese primer pallet (se suma, no multiplica).
 const TARIFAS_RM = {
   ZONA1: [
-    { hasta: 25000,    precio: 5990 },
-    { hasta: 40000,    precio: 9990 },
-    { hasta: 100000,   precio: 15990 },
-    { hasta: 300000,   precio: 24990 },
-    { hasta: 900000,   precio: 40990 },
+    { hasta: 25000,    precio: 3490 },
+    { hasta: 40000,    precio: 4490 },
+    { hasta: 100000,   precio: 6490 },
+    { hasta: 300000,   precio: 9490 },
+    { hasta: 900000,   precio: 24990 },
     { hasta: 1800000,  precio: 74990 },
-    { hasta: Infinity, precioPorPallet: 74990 }
+    { hasta: Infinity, base: 74990, extraPorPallet: 10000 }
   ],
   ZONA2: [
-    { hasta: 25000,    precio: 9990 },
-    { hasta: 40000,    precio: 14990 },
-    { hasta: 100000,   precio: 21990 },
-    { hasta: 300000,   precio: 31990 },
-    { hasta: 900000,   precio: 55990 },
-    { hasta: 1800000,  precio: 94990 },
-    { hasta: Infinity, precioPorPallet: 94990 }
+    { hasta: 25000,    precio: 3990 },
+    { hasta: 40000,    precio: 4990 },
+    { hasta: 100000,   precio: 6990 },
+    { hasta: 300000,   precio: 9990 },
+    { hasta: 900000,   precio: 24990 },
+    { hasta: 1800000,  precio: 74990 },
+    { hasta: Infinity, base: 74990, extraPorPallet: 10000 }
   ],
   ZONA3: [
-    { hasta: 25000,    precio: 14990 },
-    { hasta: 40000,    precio: 19990 },
-    { hasta: 100000,   precio: 28990 },
-    { hasta: 300000,   precio: 39990 },
-    { hasta: 900000,   precio: 65990 },
-    { hasta: 1800000,  precio: 110990 },
-    { hasta: Infinity, precioPorPallet: 110990 }
+    { hasta: 25000,    precio: 6990 },
+    { hasta: 40000,    precio: 8990 },
+    { hasta: 100000,   precio: 10990 },
+    { hasta: 300000,   precio: 14990 },
+    { hasta: 900000,   precio: 34990 },
+    { hasta: 1800000,  precio: 74990 },
+    { hasta: Infinity, base: 74990, extraPorPallet: 10000 }
   ]
 };
 
@@ -128,9 +130,12 @@ function calcularTarifaRM(zona, pesoGramos) {
   for (const tramo of TARIFAS_RM[zona]) {
     if (pesoGramos <= tramo.hasta) {
       if (tramo.precio !== undefined) return tramo.precio;
-      if (tramo.precioPorPallet !== undefined) {
+      if (tramo.base !== undefined) {
+        // 1 pallet = 1.800.000 g. El primer pallet ya está cubierto por "base".
+        // Cada pallet ADICIONAL sobre el primero suma extraPorPallet (no multiplica el total).
         const pallets = Math.ceil(pesoGramos / 1800000);
-        return pallets * tramo.precioPorPallet;
+        const palletsExtra = Math.max(0, pallets - 1);
+        return tramo.base + (palletsExtra * tramo.extraPorPallet);
       }
     }
   }
