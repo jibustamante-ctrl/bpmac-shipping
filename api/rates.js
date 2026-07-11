@@ -143,9 +143,9 @@ function calcularTarifaRM(zona, pesoGramos) {
 }
 
 function descripcionRM(pesoGramos) {
-  if (pesoGramos <= 25000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
-  if (pesoGramos <= 40000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
-  if (pesoGramos <= 300000)  return "Entrega en 2-3 días hábiles · Martes y Jueves";
+  if (pesoGramos <= 25000)   return "";
+  if (pesoGramos <= 40000)   return "";
+  if (pesoGramos <= 300000)  return "";
   if (pesoGramos <= 900000)  return `½ pallet (${(pesoGramos/1000).toFixed(0)} kg) · Entrega coordinada`;
   if (pesoGramos <= 1800000) return "1 pallet completo · Entrega coordinada";
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
