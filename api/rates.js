@@ -143,9 +143,9 @@ function calcularTarifaRM(zona, pesoGramos) {
 }
 
 function descripcionRM(pesoGramos) {
-  if (pesoGramos <= 25000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
-  if (pesoGramos <= 40000)   return "Entrega en 2-3 días hábiles · Martes y Jueves";
-  if (pesoGramos <= 300000)  return "Entrega en 2-3 días hábiles · Martes y Jueves";
+  if (pesoGramos <= 25000)   return "";
+  if (pesoGramos <= 40000)   return "";
+  if (pesoGramos <= 300000)  return "";
   if (pesoGramos <= 900000)  return `½ pallet (${(pesoGramos/1000).toFixed(0)} kg) · Entrega coordinada`;
   if (pesoGramos <= 1800000) return "1 pallet completo · Entrega coordinada";
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
@@ -190,17 +190,15 @@ export default async function handler(req, res) {
       const tarifa = calcularTarifaRM(zona, pesoTotal);
       if (!tarifa) return res.status(200).json({ rates: [] });
       const zonaLabel = zona === "ZONA1" ? "Zona 1" : zona === "ZONA2" ? "Zona 2" : "Zona 3";
-      return res.status(200).json({
-        rates: [{
-          service_name: `Despacho BPMAC · ${ciudad} (${zonaLabel})`,
-          service_code: `BPMAC_RM_${zona}`,
-          total_price: String(tarifa * 100),
-          currency: "CLP",
-          min_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
-          max_delivery_date: new Date(Date.now() + 5 * 86400000).toISOString(),
-          description: descripcionRM(pesoTotal)
-        }]
-      });
+      rreturn res.status(200).json({
+  rates: [{
+    service_name: `Despacho BPMAC · ${ciudad} (${zonaLabel})`,
+    service_code: `BPMAC_RM_${zona}`,
+    total_price: String(tarifa * 100),
+    currency: "CLP",
+    description: descripcionRM(pesoTotal)
+  }]
+});
     }
 
     // ── CASO 3: Fuera de RM sin EPS → FedEx/BlueExpress ──────────────────
