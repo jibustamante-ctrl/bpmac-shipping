@@ -183,7 +183,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ─────────────
+// ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ─────────────
     const zona = getZona(ciudad);
     if (zona) {
       const pesoTotal = items.reduce((sum, i) => sum + ((i.grams || 0) * i.quantity), 0);
@@ -196,11 +196,10 @@ export default async function handler(req, res) {
           service_code: `BPMAC_RM_${zona}`,
           total_price: String(tarifa * 100),
           currency: "CLP",
-          min_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
-          max_delivery_date: new Date(Date.now() + 5 * 86400000).toISOString(),
           description: descripcionRM(pesoTotal)
         }]
       });
+    }
     }
 
     // ── CASO 3: Fuera de RM sin EPS → FedEx/BlueExpress ──────────────────
