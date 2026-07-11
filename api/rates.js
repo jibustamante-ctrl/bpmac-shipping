@@ -197,7 +197,7 @@ export default async function handler(req, res) {
           total_price: String(tarifa * 100),
           currency: "CLP",
           min_delivery_date: new Date(Date.now() + 1 * 86400000).toISOString(),
-          max_delivery_date: new Date(Date.now() + 4 * 86400000).toISOString(),
+          max_delivery_date: new Date(Date.now() + 3 * 86400000).toISOString(),
           description: descripcionRM(pesoTotal)
         }]
       });
