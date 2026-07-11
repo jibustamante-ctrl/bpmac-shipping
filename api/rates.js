@@ -190,7 +190,7 @@ export default async function handler(req, res) {
       const tarifa = calcularTarifaRM(zona, pesoTotal);
       if (!tarifa) return res.status(200).json({ rates: [] });
       const zonaLabel = zona === "ZONA1" ? "Zona 1" : zona === "ZONA2" ? "Zona 2" : "Zona 3";
-      rreturn res.status(200).json({
+     return res.status(200).json({
   rates: [{
     service_name: `Despacho BPMAC · ${ciudad} (${zonaLabel})`,
     service_code: `BPMAC_RM_${zona}`,
