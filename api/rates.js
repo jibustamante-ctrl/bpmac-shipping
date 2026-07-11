@@ -143,7 +143,7 @@ function calcularTarifaRM(zona, pesoGramos) {
 }
 
 function descripcionRM(pesoGramos) {
-  if (pesoGramos <= 25000)   return "";
+  if (pesoGramos <= 25000)   return "Tiempo de envío estimado | Coordina con tu ejecutivo";
   if (pesoGramos <= 40000)   return "";
   if (pesoGramos <= 300000)  return "";
   if (pesoGramos <= 900000)  return `½ pallet (${(pesoGramos/1000).toFixed(0)} kg) · Entrega coordinada`;
