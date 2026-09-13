@@ -1,5 +1,3 @@
-
-Rates · JS
 // BPMAC — Carrier Service Unificado
 // 1. Si hay EPS → tarifas EPS por comuna (todo Chile)
 // 2. Si NO hay EPS y comuna es RM → tarifas despacho propio por zona + peso
