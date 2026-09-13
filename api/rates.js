@@ -1,8 +1,10 @@
+
+Rates · JS
 // BPMAC — Carrier Service Unificado
 // 1. Si hay EPS → tarifas EPS por comuna (todo Chile)
 // 2. Si NO hay EPS y comuna es RM → tarifas despacho propio por zona + peso
 // 3. Cualquier otro caso → sin tarifa (FedEx/BlueExpress)
-
+ 
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
 const TARIFAS_EPS = {
   "ALGARROBO": 197000, "ALHUE": 166300, "BATUCO": 29990, "BUCALEMU": 270600,
@@ -49,7 +51,7 @@ const TARIFAS_EPS = {
   "VILLA ALEMANA": 193700, "VINA DEL MAR": 193700, "VITACURA": 14990,
   "ZAPALLAR": 228300
 };
-
+ 
 // ─── ZONAS RM ─────────────────────────────────────────────────────────────────
 const ZONA1 = [
   "SAN MIGUEL", "PEDRO AGUIRRE CERDA", "LO ESPEJO", "SAN JOAQUIN",
@@ -69,7 +71,7 @@ const ZONA3 = [
   "PADRE HURTADO", "EL MONTE", "CALERA DE TANGO", "SAN JOSE DE MAIPO",
   "PIRQUE"
 ];
-
+ 
 // ─── TARIFAS RM (CLP neto, sin IVA) — actualizado 11-jul-2026 ────────────────
 // "base" es la tarifa del tramo "1 pallet". "extraPorPallet" es el cargo
 // POR CADA PALLET ADICIONAL sobre ese primer pallet (se suma, no multiplica).
@@ -102,7 +104,7 @@ const TARIFAS_RM = {
     { hasta: Infinity, base: 74990, extraPorPallet: 10000 }
   ]
 };
-
+ 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function normalize(str) {
   return (str || "")
@@ -113,11 +115,31 @@ function normalize(str) {
     .replace(/\s+/g, " ")
     .trim();
 }
-
+ 
+// Morteros + EIFS + Natstone: usan la misma tarifa plana por comuna que EPS
+// (agregado ago-2026, sucursal "Materiales de Construccion" ex-EPS)
+const IDS_MORTERO_EIFS_NATSTONE = new Set([
+  "8679367377152", "8679449821440", "8832759529728", "9167909585152",
+  "9385245278464", "9388001001728", "9388002443520", "9429018444032",
+  "9167902474496", "9319431831808", "9459425476864", "9464786845952",
+  "8511495799040", "8679131382016", "8679133643008", "8900013949184",
+  "8900029219072", "9314060468480", "9398209544448", "9398213116160",
+  "9398234611968", "9404289155328", "8507499053312", "8507527364864",
+  "8660564902144", "8660566081792", "8660571259136", "8679118209280",
+  "8679137837312", "8679164969216", "8679192363264", "8771457155328",
+  "8849842667776", "9028622811392", "9319432290560", "9336608522496",
+  "9358574944512", "9438222156032", "9441584808192", "9470937071872",
+  "9489842602240"
+]);
+ 
 function hasEPS(items) {
-  return items.some(i => i.product_type === "Aislación Térmica" || i.vendor === "ETSA");
+  return items.some(i =>
+    i.product_type === "Aislación Térmica" ||
+    i.vendor === "ETSA" ||
+    IDS_MORTERO_EIFS_NATSTONE.has(String(i.product_id))
+  );
 }
-
+ 
 function getZona(comuna) {
   const c = normalize(comuna);
   if (ZONA1.includes(c)) return "ZONA1";
@@ -125,7 +147,7 @@ function getZona(comuna) {
   if (ZONA3.includes(c)) return "ZONA3";
   return null;
 }
-
+ 
 function calcularTarifaRM(zona, pesoGramos) {
   for (const tramo of TARIFAS_RM[zona]) {
     if (pesoGramos <= tramo.hasta) {
@@ -141,7 +163,7 @@ function calcularTarifaRM(zona, pesoGramos) {
   }
   return null;
 }
-
+ 
 function descripcionRM(pesoGramos) {
   if (pesoGramos <= 25000)   return "Tiempo de envío aproximado | Coordina con tu ejecutivo";
   if (pesoGramos <= 40000)   return "Tiempo de envío aproximado | Coordina con tu ejecutivo";
@@ -150,22 +172,22 @@ function descripcionRM(pesoGramos) {
   if (pesoGramos <= 1800000) return "1 pallet completo · Entrega coordinada";
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
 }
-
+ 
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Shopify-Shop-Domain");
-
+ 
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST")    return res.status(405).json({ error: "Method not allowed" });
-
+ 
   try {
     const { rate } = req.body;
     const { destination, items } = rate;
     const ciudad = destination.city || "";
     const comunaNorm = normalize(ciudad);
-
+ 
     // ── CASO 1: Carrito con EPS → tarifas EPS ────────────────────────────
     if (hasEPS(items)) {
       const tarifa = TARIFAS_EPS[comunaNorm];
@@ -182,7 +204,7 @@ export default async function handler(req, res) {
         }]
       });
     }
-
+ 
     // ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ─────────────
     const zona = getZona(ciudad);
     if (zona) {
@@ -202,12 +224,14 @@ export default async function handler(req, res) {
         }]
       });
     }
-
+ 
     // ── CASO 3: Fuera de RM sin EPS → FedEx/BlueExpress ──────────────────
     return res.status(200).json({ rates: [] });
-
+ 
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Error interno" });
   }
 }
+ 
+
