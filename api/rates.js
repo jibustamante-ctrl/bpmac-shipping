@@ -2,6 +2,7 @@
 // 1. Si hay EPS → tarifas EPS por comuna (todo Chile)
 // 2. Si NO hay EPS y comuna es RM → tarifas despacho propio por zona + peso
 // 3. Cualquier otro caso → sin tarifa (FedEx/BlueExpress)
+// 0. Antes de todo: validación de pedido mínimo por etiqueta (ver validarPedidoMinimo)
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
 const TARIFAS_EPS = {
@@ -203,6 +204,154 @@ function descripcionRM(pesoGramos) {
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
 }
  
+// ─── PEDIDO MÍNIMO (validación real en el checkout) ───────────────────────────
+// Los productos se identifican SOLO por etiqueta (nunca por ID), para sumar
+// productos nuevos basta con etiquetarlos en Shopify.
+//   compra-minima-eps : suma(precio × cantidad) de esas líneas >= $180.000 con IVA
+//   pedido-minimo-6   : suma de unidades de esas líneas >= 6
+// Si no se cumple, se responde { rates: [] } → no hay despacho → no se puede pagar.
+const TAG_MIN_EPS = "compra-minima-eps";
+const TAG_MIN_6   = "pedido-minimo-6";
+const MIN_EPS_CLP_CON_IVA = 180000;
+const MIN_BOLSAS = 6;
+const IVA = 1.19;
+
+// item.price de Shopify llega en "centavos" (CLP × 100). Por defecto se asume que
+// incluye IVA (la tienda tiene taxesIncluded = true). Si un callback real demostrara
+// que llega neto, definir PRICES_INCLUDE_TAX=false en Vercel y se compara contra 180000/1.19.
+function minEpsEnCentavos() {
+  const conIva = process.env.PRICES_INCLUDE_TAX !== "false";
+  const clp = conIva ? MIN_EPS_CLP_CON_IVA : MIN_EPS_CLP_CON_IVA / IVA;
+  return Math.round(clp * 100);
+}
+
+const SHOP_DOMAIN = process.env.SHOPIFY_SHOP_DOMAIN || "87bd18-3.myshopify.com";
+const ADMIN_API_VERSION = "2025-10";
+const TAGS_TTL_MS = 10 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 4000;
+const TOKEN_RENEW_MARGIN_MS = 5 * 60 * 1000; // se renueva 5 min antes de que expire
+const tagsCache = new Map(); // product_id (string) -> { tags: string[], ts: number }
+let tokenCache = null;       // { token, expiresAt }
+
+async function fetchJson(url, init) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { ...init, signal: ctl.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status} en ${new URL(url).pathname}`);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Token de la app "BPMAC EPS Shipping" (Dev Dashboard) con client credentials grant.
+// Requiere SHOPIFY_CLIENT_ID y SHOPIFY_CLIENT_SECRET en Vercel. Dura ~24 h; se cachea y renueva.
+async function getAdminToken() {
+  const now = Date.now();
+  if (tokenCache && now < tokenCache.expiresAt - TOKEN_RENEW_MARGIN_MS) return tokenCache.token;
+  const { SHOPIFY_CLIENT_ID: id, SHOPIFY_CLIENT_SECRET: secret } = process.env;
+  if (!id || !secret) throw new Error("Faltan SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET");
+  const body = await fetchJson(`https://${SHOP_DOMAIN}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: id, client_secret: secret, grant_type: "client_credentials" })
+  });
+  if (!body.access_token) throw new Error("La respuesta de token no trae access_token");
+  tokenCache = { token: body.access_token, expiresAt: now + (Number(body.expires_in) || 86399) * 1000 };
+  return tokenCache.token;
+}
+
+// Devuelve Map<product_id, Set<tag en minúsculas>>. Usa caché de ~10 min y solo
+// consulta a Shopify los IDs que faltan. Si la consulta falla, usa el caché vencido
+// si existe; si no, devuelve null (fail-open: el llamador no bloquea).
+async function getTagsByProduct(productIds) {
+  const now = Date.now();
+  const missing = productIds.filter(id => {
+    const c = tagsCache.get(id);
+    return !c || now - c.ts > TAGS_TTL_MS;
+  });
+
+  if (missing.length) {
+    try {
+      const token = await getAdminToken();
+      const body = await fetchJson(`https://${SHOP_DOMAIN}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+        body: JSON.stringify({
+          query: "query($ids:[ID!]!){ nodes(ids:$ids){ ... on Product { id tags } } }",
+          variables: { ids: missing.map(id => `gid://shopify/Product/${id}`) }
+        })
+      });
+      if (body.errors) {
+        // Token rechazado: se descarta para pedir uno nuevo en la próxima llamada
+        tokenCache = null;
+        throw new Error(`Admin API errors: ${JSON.stringify(body.errors)}`);
+      }
+      const seen = new Set();
+      for (const n of body.data.nodes) {
+        if (!n || !n.id) continue;
+        const id = n.id.split("/").pop();
+        tagsCache.set(id, { tags: (n.tags || []).map(t => t.toLowerCase()), ts: now });
+        seen.add(id);
+      }
+      // IDs que Shopify no devolvió (producto borrado): se cachean sin etiquetas
+      for (const id of missing) if (!seen.has(id)) tagsCache.set(id, { tags: [], ts: now });
+    } catch (err) {
+      if (/HTTP 401/.test(String(err.message))) tokenCache = null;
+      const sinCache = missing.filter(id => !tagsCache.has(id));
+      console.error(JSON.stringify({
+        event: "TAGS_LOOKUP_FAILED", error: String(err.message || err),
+        product_ids: missing, sin_cache: sinCache
+      }));
+      if (sinCache.length) return null;
+    }
+  }
+
+  const out = new Map();
+  for (const id of productIds) out.set(id, new Set((tagsCache.get(id) || { tags: [] }).tags));
+  return out;
+}
+
+// Devuelve null si se cumplen las reglas, o un objeto { rule, ... } con el rechazo.
+async function validarPedidoMinimo(items) {
+  // Precio SIN descuento (el payload de tarifas no trae descuentos); el tema calcula igual.
+  const ids = [...new Set(items.map(i => String(i.product_id)))];
+  const tags = await getTagsByProduct(ids);
+  if (!tags) return { rechazo: null, conEtiquetas: false }; // fail-open
+
+  const lineasEps = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_EPS));
+  const lineas6 = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_6));
+  const conEtiquetas = lineasEps.length > 0 || lineas6.length > 0;
+  if (lineasEps.length) {
+    const totalCent = lineasEps.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
+    const minCent = minEpsEnCentavos();
+    if (totalCent < minCent) {
+      return { conEtiquetas, rechazo: {
+        rule: TAG_MIN_EPS,
+        monto_clp: Math.round(totalCent / 100),
+        minimo_clp: Math.round(minCent / 100),
+        faltante_clp: Math.round((minCent - totalCent) / 100),
+        product_ids: [...new Set(lineasEps.map(i => String(i.product_id)))]
+      } };
+    }
+  }
+
+  if (lineas6.length) {
+    const bolsas = lineas6.reduce((s, i) => s + Number(i.quantity), 0);
+    if (bolsas < MIN_BOLSAS) {
+      return { conEtiquetas, rechazo: {
+        rule: TAG_MIN_6,
+        cantidad: bolsas,
+        minimo: MIN_BOLSAS,
+        faltante: MIN_BOLSAS - bolsas,
+        product_ids: [...new Set(lineas6.map(i => String(i.product_id)))]
+      } };
+    }
+  }
+  return { rechazo: null, conEtiquetas };
+}
+
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -217,6 +366,20 @@ export default async function handler(req, res) {
     const { destination, items } = rate;
     const ciudad = destination.city || "";
     const comunaNorm = normalize(ciudad);
+ 
+    // ── PEDIDO MÍNIMO: si no se cumple, sin tarifas → no se puede pagar ──
+    // MIN_ORDER_ENFORCE=true bloquea; cualquier otro valor = modo observación (solo log).
+    const enforce = process.env.MIN_ORDER_ENFORCE === "true";
+    const { rechazo, conEtiquetas: carritoConEtiquetas } = await validarPedidoMinimo(items);
+    if (rechazo || carritoConEtiquetas) {
+      // Se registran los ítems crudos y el destino sin datos personales (nombre, dirección, teléfono).
+      console.log(JSON.stringify({
+        event: rechazo ? (enforce ? "MIN_ORDER_REJECT" : "MIN_ORDER_WOULD_REJECT") : "MIN_ORDER_OBSERVE_OK",
+        enforce, comuna: ciudad, region: destination.province, currency: rate.currency,
+        raw_items: items, ...(rechazo || {})
+      }));
+    }
+    if (rechazo && enforce) return res.status(200).json({ rates: [] });
  
     // ── CASO 1: Carrito con EPS → tarifas EPS ────────────────────────────
     if (hasEPS(items)) {
