@@ -15,7 +15,8 @@ let tokenCalls = 0, tokenExpiresIn = 86399;
 const TAGS = {
   "10262772908288": ["compra-minima-eps", "eps aislapol"], // plancha 2x1 30 kg
   "8867337044224":  ["compra-minima-eps"],                 // plancha 100x50 30 kg
-  "8680166949120":  ["pedido-minimo-6", "plumavit"],       // perlas y granulado
+  "8680166949120":  ["pedido-minimo-10", "plumavit"],      // perlas y granulado (etiqueta nueva)
+  "2222":           ["pedido-minimo-6"],                  // etiqueta histórica, aún aceptada en la transición
   "8881357095168":  ["soporte para tina"],                 // soporte de tina (sin regla)
   "9544381432064":  ["agente-whatsapp"],                   // huincha juntas EPS (sin regla)
   "1111":           ["mortero"]                            // producto cualquiera
@@ -72,6 +73,8 @@ await t("planchas por $179.990 → []", async () => vacio(await call(nuevo, [it(
 await t("planchas por $180.000 → tarifas", async () => conTarifas(await call(nuevo, [it(PLANCHA, 90000, 2)])));
 await t("planchas $150.000 + otros $50.000 → []", async () => vacio(await call(nuevo, [it(PLANCHA, 150000, 1), otro(50000)])));
 await t("9 bolsas (5 Perlita + 4 Granulado) → []", async () => vacio(await call(nuevo, [it(PERLAS, 18990, 5), it(PERLAS, 18990, 4)])));
+await t("etiqueta histórica pedido-minimo-6: 9 bolsas → []", async () => vacio(await call(nuevo, [it("2222", 18990, 9)])));
+await t("etiqueta histórica pedido-minimo-6: 10 bolsas → tarifas", async () => conTarifas(await call(nuevo, [it("2222", 18990, 10)])));
 await t("10 bolsas (5+5) → tarifas", async () => conTarifas(await call(nuevo, [it(PERLAS, 18990, 5), it(PERLAS, 18990, 5)])));
 await t("6 bolsas (antiguo mínimo) → [] con el mínimo de 10", async () => vacio(await call(nuevo, [it(PERLAS, 18990, 3), it(PERLAS, 18990, 3)])));
 await t("carrito sin EPS → igual que antes", async () => igualAntes([otro(30000, 2)]));

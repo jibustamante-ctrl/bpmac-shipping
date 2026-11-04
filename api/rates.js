@@ -211,7 +211,9 @@ function descripcionRM(pesoGramos) {
 //   pedido-minimo-6   : suma de unidades de esas líneas >= MIN_BOLSAS (10 desde 2026-11-04; la etiqueta conserva el nombre histórico "-6")
 // Si no se cumple, se responde { rates: [] } → no hay despacho → no se puede pagar.
 const TAG_MIN_EPS = "compra-minima-eps";
-const TAG_MIN_6   = "pedido-minimo-6";
+// Transición: "pedido-minimo-6" es el nombre histórico de la etiqueta (el mínimo real es 10). Se acepta mientras se retaguea el producto.
+const TAGS_MIN_BOLSAS = ["pedido-minimo-10", "pedido-minimo-6"];
+const TAG_MIN_BOLSAS_REGLA = "pedido-minimo-10";
 const MIN_EPS_CLP_CON_IVA = 180000;
 const MIN_BOLSAS = 10;
 const IVA = 1.19;
@@ -321,7 +323,7 @@ async function validarPedidoMinimo(items) {
   if (!tags) return { rechazo: null, conEtiquetas: false }; // fail-open
 
   const lineasEps = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_EPS));
-  const lineas6 = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_6));
+  const lineas6 = items.filter(i => TAGS_MIN_BOLSAS.some(t => tags.get(String(i.product_id)).has(t)));
   const conEtiquetas = lineasEps.length > 0 || lineas6.length > 0;
   if (lineasEps.length) {
     const totalCent = lineasEps.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
@@ -341,7 +343,7 @@ async function validarPedidoMinimo(items) {
     const bolsas = lineas6.reduce((s, i) => s + Number(i.quantity), 0);
     if (bolsas < MIN_BOLSAS) {
       return { conEtiquetas, rechazo: {
-        rule: TAG_MIN_6,
+        rule: TAG_MIN_BOLSAS_REGLA,
         cantidad: bolsas,
         minimo: MIN_BOLSAS,
         faltante: MIN_BOLSAS - bolsas,
