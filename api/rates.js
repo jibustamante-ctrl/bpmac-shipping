@@ -208,12 +208,12 @@ function descripcionRM(pesoGramos) {
 // Los productos se identifican SOLO por etiqueta (nunca por ID), para sumar
 // productos nuevos basta con etiquetarlos en Shopify.
 //   compra-minima-eps : suma(precio × cantidad) de esas líneas >= $180.000 con IVA
-//   pedido-minimo-6   : suma de unidades de esas líneas >= 6
+//   pedido-minimo-6   : suma de unidades de esas líneas >= MIN_BOLSAS (10 desde 2026-11-04; la etiqueta conserva el nombre histórico "-6")
 // Si no se cumple, se responde { rates: [] } → no hay despacho → no se puede pagar.
 const TAG_MIN_EPS = "compra-minima-eps";
 const TAG_MIN_6   = "pedido-minimo-6";
 const MIN_EPS_CLP_CON_IVA = 180000;
-const MIN_BOLSAS = 6;
+const MIN_BOLSAS = 10;
 const IVA = 1.19;
 
 // item.price de Shopify llega en "centavos" (CLP × 100). Por defecto se asume que

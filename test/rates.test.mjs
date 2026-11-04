@@ -71,13 +71,14 @@ const igualAntes = async items => {
 await t("planchas por $179.990 → []", async () => vacio(await call(nuevo, [it(PLANCHA, 179990, 1)])));
 await t("planchas por $180.000 → tarifas", async () => conTarifas(await call(nuevo, [it(PLANCHA, 90000, 2)])));
 await t("planchas $150.000 + otros $50.000 → []", async () => vacio(await call(nuevo, [it(PLANCHA, 150000, 1), otro(50000)])));
-await t("5 bolsas (3 Perlita + 2 Granulado) → []", async () => vacio(await call(nuevo, [it(PERLAS, 17990, 3), it(PERLAS, 15990, 2)])));
-await t("6 bolsas → tarifas", async () => conTarifas(await call(nuevo, [it(PERLAS, 17990, 3), it(PERLAS, 15990, 3)])));
+await t("9 bolsas (5 Perlita + 4 Granulado) → []", async () => vacio(await call(nuevo, [it(PERLAS, 18990, 5), it(PERLAS, 18990, 4)])));
+await t("10 bolsas (5+5) → tarifas", async () => conTarifas(await call(nuevo, [it(PERLAS, 18990, 5), it(PERLAS, 18990, 5)])));
+await t("6 bolsas (antiguo mínimo) → [] con el mínimo de 10", async () => vacio(await call(nuevo, [it(PERLAS, 18990, 3), it(PERLAS, 18990, 3)])));
 await t("carrito sin EPS → igual que antes", async () => igualAntes([otro(30000, 2)]));
 await t("soporte de tina solo → igual que antes", async () => igualAntes([it(TINA, 17990, 1)]));
 await t("huincha sola → igual que antes (EPS plana)", async () => igualAntes([it(HUINCHA, 59990, 1)]));
 await t("soporte de tina + huincha → igual que antes", async () => igualAntes([it(TINA, 17990, 1), it(HUINCHA, 59990, 1)]));
-await t("planchas ≥ mínimo + 2 perlas (< 6) → [] (cada regla se evalúa)", async () => vacio(await call(nuevo, [it(PLANCHA, 200000, 1), it(PERLAS, 17990, 2)])));
+await t("planchas ≥ mínimo + 2 perlas (< 6) → [] (cada regla se evalúa)", async () => vacio(await call(nuevo, [it(PLANCHA, 200000, 1), it(PERLAS, 18990, 2)])));
 await t("planchas bajo mínimo + huincha (no suma) → []", async () => vacio(await call(nuevo, [it(PLANCHA, 130000, 1), it(HUINCHA, 59990, 1)])));
 await t("planchas + otros pero planchas ≥ 180.000 → tarifas", async () => conTarifas(await call(nuevo, [it(PLANCHA, 180000, 1), otro(10000)])));
 await t("comuna sin tarifa EPS con planchas sobre mínimo → [] (como antes)", async () => {
