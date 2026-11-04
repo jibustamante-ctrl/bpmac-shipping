@@ -2,6 +2,7 @@
 // 1. Si hay EPS → tarifas EPS por comuna (todo Chile)
 // 2. Si NO hay EPS y comuna es RM → tarifas despacho propio por zona + peso
 // 3. Cualquier otro caso → sin tarifa (FedEx/BlueExpress)
+// 0. Antes de todo: validación de pedido mínimo por etiqueta (ver validarPedidoMinimo)
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
 const TARIFAS_EPS = {
@@ -203,6 +204,127 @@ function descripcionRM(pesoGramos) {
   return `${Math.ceil(pesoGramos/1800000)} pallets · Camión externo · Entrega coordinada`;
 }
  
+// ─── PEDIDO MÍNIMO (validación real en el checkout) ───────────────────────────
+// Los productos se identifican SOLO por etiqueta (nunca por ID), para sumar
+// productos nuevos basta con etiquetarlos en Shopify.
+//   compra-minima-eps : suma(precio × cantidad) de esas líneas >= $180.000 con IVA
+//   pedido-minimo-6   : suma de unidades de esas líneas >= 6
+// Si no se cumple, se responde { rates: [] } → no hay despacho → no se puede pagar.
+const TAG_MIN_EPS = "compra-minima-eps";
+const TAG_MIN_6   = "pedido-minimo-6";
+const MIN_EPS_CLP_CON_IVA = 180000;
+const MIN_BOLSAS = 6;
+const IVA = 1.19;
+
+// item.price de Shopify llega en "centavos" (CLP × 100). Por defecto se asume que
+// incluye IVA (la tienda tiene taxesIncluded = true). Si un callback real demostrara
+// que llega neto, definir PRICES_INCLUDE_TAX=false en Vercel y se compara contra 180000/1.19.
+function minEpsEnCentavos() {
+  const conIva = process.env.PRICES_INCLUDE_TAX !== "false";
+  const clp = conIva ? MIN_EPS_CLP_CON_IVA : MIN_EPS_CLP_CON_IVA / IVA;
+  return Math.round(clp * 100);
+}
+
+const SHOP_DOMAIN = process.env.SHOPIFY_SHOP_DOMAIN || "87bd18-3.myshopify.com";
+const ADMIN_API_VERSION = "2025-10";
+const TAGS_TTL_MS = 10 * 60 * 1000;
+const TAGS_FETCH_TIMEOUT_MS = 4000;
+const tagsCache = new Map(); // product_id (string) -> { tags: string[], ts: number }
+
+// Devuelve Map<product_id, Set<tag en minúsculas>>. Usa caché de ~10 min y solo
+// consulta a Shopify los IDs que faltan. Si la consulta falla, usa el caché vencido
+// si existe; si no, devuelve null (el llamador decide qué hacer).
+async function getTagsByProduct(productIds) {
+  const now = Date.now();
+  const missing = productIds.filter(id => {
+    const c = tagsCache.get(id);
+    return !c || now - c.ts > TAGS_TTL_MS;
+  });
+
+  if (missing.length) {
+    const token = process.env.SHOPIFY_ADMIN_TOKEN;
+    try {
+      if (!token) throw new Error("SHOPIFY_ADMIN_TOKEN no está definido");
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), TAGS_FETCH_TIMEOUT_MS);
+      let r;
+      try {
+        r = await fetch(`https://${SHOP_DOMAIN}/admin/api/${ADMIN_API_VERSION}/graphql.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+          body: JSON.stringify({
+            query: "query($ids:[ID!]!){ nodes(ids:$ids){ ... on Product { id tags } } }",
+            variables: { ids: missing.map(id => `gid://shopify/Product/${id}`) }
+          }),
+          signal: ctl.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!r.ok) throw new Error(`Admin API HTTP ${r.status}`);
+      const body = await r.json();
+      if (body.errors) throw new Error(`Admin API errors: ${JSON.stringify(body.errors)}`);
+      const seen = new Set();
+      for (const n of body.data.nodes) {
+        if (!n || !n.id) continue;
+        const id = n.id.split("/").pop();
+        tagsCache.set(id, { tags: (n.tags || []).map(t => t.toLowerCase()), ts: now });
+        seen.add(id);
+      }
+      // IDs que Shopify no devolvió (producto borrado): se cachean sin etiquetas
+      for (const id of missing) if (!seen.has(id)) tagsCache.set(id, { tags: [], ts: now });
+    } catch (err) {
+      const sinCache = missing.filter(id => !tagsCache.has(id));
+      console.error(JSON.stringify({
+        event: "TAGS_LOOKUP_FAILED", error: String(err.message || err),
+        product_ids: missing, sin_cache: sinCache
+      }));
+      if (sinCache.length) return null;
+    }
+  }
+
+  const out = new Map();
+  for (const id of productIds) out.set(id, new Set((tagsCache.get(id) || { tags: [] }).tags));
+  return out;
+}
+
+// Devuelve null si se cumplen las reglas, o un objeto { rule, ... } con el rechazo.
+async function validarPedidoMinimo(items) {
+  const ids = [...new Set(items.map(i => String(i.product_id)))];
+  const tags = await getTagsByProduct(ids);
+  if (!tags) return null; // no se pudo consultar Shopify: no se bloquea (ver README)
+
+  const lineasEps = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_EPS));
+  if (lineasEps.length) {
+    const totalCent = lineasEps.reduce((s, i) => s + Number(i.price) * Number(i.quantity), 0);
+    const minCent = minEpsEnCentavos();
+    if (totalCent < minCent) {
+      return {
+        rule: TAG_MIN_EPS,
+        monto_clp: Math.round(totalCent / 100),
+        minimo_clp: Math.round(minCent / 100),
+        faltante_clp: Math.round((minCent - totalCent) / 100),
+        product_ids: [...new Set(lineasEps.map(i => String(i.product_id)))]
+      };
+    }
+  }
+
+  const lineas6 = items.filter(i => tags.get(String(i.product_id)).has(TAG_MIN_6));
+  if (lineas6.length) {
+    const bolsas = lineas6.reduce((s, i) => s + Number(i.quantity), 0);
+    if (bolsas < MIN_BOLSAS) {
+      return {
+        rule: TAG_MIN_6,
+        cantidad: bolsas,
+        minimo: MIN_BOLSAS,
+        faltante: MIN_BOLSAS - bolsas,
+        product_ids: [...new Set(lineas6.map(i => String(i.product_id)))]
+      };
+    }
+  }
+  return null;
+}
+
 // ─── HANDLER ──────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -217,6 +339,13 @@ export default async function handler(req, res) {
     const { destination, items } = rate;
     const ciudad = destination.city || "";
     const comunaNorm = normalize(ciudad);
+ 
+    // ── PEDIDO MÍNIMO: si no se cumple, sin tarifas → no se puede pagar ──
+    const rechazo = await validarPedidoMinimo(items);
+    if (rechazo) {
+      console.log(JSON.stringify({ event: "MIN_ORDER_REJECT", comuna: ciudad, ...rechazo }));
+      return res.status(200).json({ rates: [] });
+    }
  
     // ── CASO 1: Carrito con EPS → tarifas EPS ────────────────────────────
     if (hasEPS(items)) {
