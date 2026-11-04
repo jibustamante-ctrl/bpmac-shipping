@@ -6,7 +6,10 @@ import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.SHOPIFY_ADMIN_TOKEN = "test-token";
+process.env.SHOPIFY_CLIENT_ID = "cid";
+process.env.SHOPIFY_CLIENT_SECRET = "csecret";
+process.env.MIN_ORDER_ENFORCE = "true";
+let tokenCalls = 0, tokenExpiresIn = 86399;
 
 // Etiquetas simuladas (IDs reales de la tienda, solo para los tests)
 const TAGS = {
@@ -19,7 +22,14 @@ const TAGS = {
 };
 let fetchCalls = 0, fetchMode = "ok";
 globalThis.fetch = async (url, opts) => {
+  if (String(url).endsWith("/admin/oauth/access_token")) {
+    tokenCalls++;
+    const b = JSON.parse(opts.body);
+    assert.equal(b.grant_type, "client_credentials"); assert.equal(b.client_id, "cid"); assert.equal(b.client_secret, "csecret");
+    return { ok: true, json: async () => ({ access_token: "tok" + tokenCalls, expires_in: tokenExpiresIn }) };
+  }
   fetchCalls++;
+  assert.ok(/^tok\d+$/.test(opts.headers["X-Shopify-Access-Token"]));
   if (fetchMode === "fail") throw new Error("network down");
   const ids = JSON.parse(opts.body).variables.ids;
   return { ok: true, json: async () => ({ data: { nodes: ids.map(g => {
@@ -96,6 +106,31 @@ await t("PRICES_INCLUDE_TAX=false → umbral 180000/1.19 (151.261)", async () =>
     conTarifas(await call(nuevo, [it(PLANCHA, 151261, 1)]));
     vacio(await call(nuevo, [it(PLANCHA, 151260, 1)]));
   } finally { delete process.env.PRICES_INCLUDE_TAX; }
+});
+
+await t("token: se pidió una sola vez y se reutiliza (caché)", async () => assert.equal(tokenCalls, 1));
+await t("token: se renueva antes de expirar (a las ~24 h)", async () => {
+  const realNow = Date.now, antes = tokenCalls;
+  Date.now = () => realNow() + 24 * 3600 * 1000; // caché de tags y de token vencidos
+  try { await call(nuevo, [it(PLANCHA, 200000, 1)]); } finally { Date.now = realNow; }
+  assert.equal(tokenCalls, antes + 1);
+});
+await t("MIN_ORDER_ENFORCE=false: no bloquea y loguea WOULD_REJECT con raw_items", async () => {
+  process.env.MIN_ORDER_ENFORCE = "false";
+  const logs = [], ol = console.log; console.log = l => logs.push(l);
+  let r;
+  try { r = await call(nuevo, [it(PLANCHA, 100000, 1)]); } finally { console.log = ol; process.env.MIN_ORDER_ENFORCE = "true"; }
+  conTarifas(r);
+  const ev = JSON.parse(logs[0]);
+  assert.equal(ev.event, "MIN_ORDER_WOULD_REJECT"); assert.equal(ev.enforce, false); assert.equal(ev.raw_items.length, 1);
+});
+await t("sin credenciales: fail-open + TAGS_LOOKUP_FAILED, no bloquea", async () => {
+  const id = process.env.SHOPIFY_CLIENT_ID; delete process.env.SHOPIFY_CLIENT_ID;
+  const realNow = Date.now; Date.now = () => realNow() + 48 * 3600 * 1000;
+  const errs = [], oe = console.error; console.error = l => errs.push(l);
+  let r; try { r = await call(nuevo, [it(PLANCHA, 100000, 1), it("999999", 1000, 1)]); } finally { Date.now = realNow; console.error = oe; process.env.SHOPIFY_CLIENT_ID = id; }
+  assert.ok(errs.some(e => e.includes("TAGS_LOOKUP_FAILED")));
+  conTarifas(r);
 });
 
 for (const [s, n] of results) console.log(s, "-", n);
