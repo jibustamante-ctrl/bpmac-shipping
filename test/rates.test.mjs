@@ -1,5 +1,5 @@
 // Pruebas con payloads simulados. Uso: node test/rates.test.mjs
-// Mockea fetch (Admin API de Shopify) y compara contra el handler original (rates.orig.mjs).
+// Mockea fetch (Admin API de Shopify) y compara contra el handler original (commit 7471fcd, previo al pedido mínimo).
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
@@ -41,7 +41,7 @@ globalThis.fetch = async (url, opts) => {
 // Handler nuevo y original (main)
 const { default: nuevo } = await import("../api/rates.js");
 const dir = mkdtempSync(join(tmpdir(), "rates-orig-"));
-writeFileSync(join(dir, "rates.orig.mjs"), execSync("git show main:api/rates.js", { cwd: new URL("..", import.meta.url).pathname }));
+writeFileSync(join(dir, "rates.orig.mjs"), execSync("git show 7471fcd:api/rates.js", { cwd: new URL("..", import.meta.url).pathname }));
 const { default: original } = await import(join(dir, "rates.orig.mjs"));
 
 async function call(handler, items, city = "Maipu") {
