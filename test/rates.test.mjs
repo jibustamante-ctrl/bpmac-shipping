@@ -45,10 +45,10 @@ const dir = mkdtempSync(join(tmpdir(), "rates-orig-"));
 writeFileSync(join(dir, "rates.orig.mjs"), execSync("git show 7471fcd:api/rates.js", { cwd: new URL("..", import.meta.url).pathname }));
 const { default: original } = await import(join(dir, "rates.orig.mjs"));
 
-async function call(handler, items, city = "Maipu") {
+async function call(handler, items, city = "Maipu", province) {
   let out;
   const res = { setHeader() {}, status(c) { this.code = c; return this; }, json(b) { out = b; return this; }, end() {} };
-  await handler({ method: "POST", body: { rate: { destination: { city }, items } } }, res);
+  await handler({ method: "POST", body: { rate: { destination: { city, ...(province ? { province } : {}) }, items } } }, res);
   return out;
 }
 const it = (product_id, price_clp, quantity, extra = {}) =>
@@ -83,9 +83,8 @@ await t("soporte de tina + huincha → igual que antes", async () => igualAntes(
 await t("planchas ≥ mínimo + 2 perlas (< 6) → [] (cada regla se evalúa)", async () => vacio(await call(nuevo, [it(PLANCHA, 200000, 1), it(PERLAS, 18990, 2)])));
 await t("planchas bajo mínimo + huincha (no suma) → []", async () => vacio(await call(nuevo, [it(PLANCHA, 130000, 1), it(HUINCHA, 59990, 1)])));
 await t("planchas + otros pero planchas ≥ 180.000 → tarifas", async () => conTarifas(await call(nuevo, [it(PLANCHA, 180000, 1), otro(10000)])));
-await t("comuna sin tarifa EPS con planchas sobre mínimo → «a coordinar» (antes: [])", async () => {
-  const r = await call(nuevo, [it(PLANCHA, 200000, 1)], "Lugar Inexistente");
-  assert.equal(r.rates.length, 1); assert.equal(r.rates[0].service_code, "A_COORDINAR"); assert.equal(r.rates[0].total_price, "0");
+await t("comuna desconocida con planchas sobre mínimo → sin tarifa (EPS solo dentro de la RM; antes: «a coordinar»)", async () => {
+  vacio(await call(nuevo, [it(PLANCHA, 200000, 1)], "Lugar Inexistente"));
 });
 
 // ── Tarifas por peso (fix-tarifas-peso) ──
@@ -150,9 +149,11 @@ await t("un artículo sin peso entre otros con peso: se cobra el peso conocido y
   let r; try { r = await call(nuevo, [saco(3), { ...fire(5), grams: 0 }], "La Florida"); } finally { console.log = ol; }
   assert.equal(precio(r), 6990); assert.ok(logs.some(l => l.includes("PESO_INCOMPLETO")));
 });
-await t("alias de comuna: «San Francisco de Mostazal» con EPS", async () => {
-  const r = await call(nuevo, [kg(PLANCHA_REAL, "Plancha", 3750, 60, 6990, "ETSA", "Aislación Térmica")], "San Francisco de Mostazal");
-  assert.equal(precio(r), 174500);
+await t("alias de comuna dentro de la RM: «Stgo» y «Santiago Centro» con EPS → tarifa de Santiago", async () => {
+  for (const city of ["Stgo", "Santiago Centro"]) {
+    const r = await call(nuevo, [kg(PLANCHA_REAL, "Plancha", 3750, 60, 6990, "ETSA", "Aislación Térmica")], city);
+    assert.equal(precio(r), 14990, city);
+  }
 });
 await t("caché: segunda llamada con mismos IDs no vuelve a consultar Shopify", async () => {
   const antes = fetchCalls;
@@ -201,6 +202,49 @@ await t("sin credenciales: fail-open + TAGS_LOOKUP_FAILED, no bloquea", async ()
   let r; try { r = await call(nuevo, [it(PLANCHA, 100000, 1), it("999999", 1000, 1)]); } finally { Date.now = realNow; console.error = oe; process.env.SHOPIFY_CLIENT_ID = id; }
   assert.ok(errs.some(e => e.includes("TAGS_LOOKUP_FAILED")));
   conTarifas(r);
+});
+
+
+// ── EPS solo en la Región Metropolitana ──
+const planchasEPS = () => [kg(PLANCHA_REAL, "Plancha Aislapol", 3750, 60, 6990, "ETSA", "Aislación Térmica")]; // $419.400: sobre el mínimo
+await t("EPS en la RM: La Florida, Puente Alto y Chicureo reciben su tarifa EPS", async () => {
+  assert.equal(precio(await call(nuevo, planchasEPS(), "La Florida")), 14990);
+  assert.equal(precio(await call(nuevo, planchasEPS(), "Puente Alto")), 14990);
+  const chicureo = await call(nuevo, planchasEPS(), "Chicureo");
+  assert.equal(precio(chicureo), 24990);
+  assert.equal(codigo(chicureo), "EPS_FLETE");
+});
+await t("EPS fuera de la RM: Chillán, Valparaíso y Antofagasta no reciben tarifa (ni «a coordinar»): no se compra con despacho", async () => {
+  for (const city of ["Chillán", "Valparaíso", "Antofagasta", "Viña del Mar", "Rancagua", "San Antonio"]) vacio(await call(nuevo, planchasEPS(), city));
+});
+await t("las comunas con tarifa EPS en la tabla pero de otra región ya no se despachan: Chillán $658.200 y Valparaíso $193.700 → []", async () => {
+  vacio(await call(nuevo, planchasEPS(), "Chillan", "NB"));
+  vacio(await call(nuevo, planchasEPS(), "Valparaiso", "VS"));
+});
+await t("la región de la dirección manda: una comuna de la RM con otra región, o una comuna desconocida con región RM, no recibe EPS", async () => {
+  vacio(await call(nuevo, planchasEPS(), "Maipu", "VS"));
+  vacio(await call(nuevo, planchasEPS(), "Lugar Inexistente", "RM"));
+  assert.equal(precio(await call(nuevo, planchasEPS(), "Maipu", "RM")), 14990);
+  assert.equal(precio(await call(nuevo, planchasEPS(), "Maipu", "Región Metropolitana de Santiago")), 14990);
+});
+await t("«San Pedro» existe en la RM y fuera de ella: solo recibe EPS si la dirección dice RM", async () => {
+  assert.equal(precio(await call(nuevo, planchasEPS(), "San Pedro", "RM")), 202000);
+  vacio(await call(nuevo, planchasEPS(), "San Pedro", "VS"));
+  vacio(await call(nuevo, planchasEPS(), "San Pedro"));
+});
+await t("un carrito sin EPS no cambia: fuera de la RM sigue «a coordinar», dentro sigue por peso", async () => {
+  assert.equal(codigo(await call(nuevo, [fire(20)], "Antofagasta")), "A_COORDINAR");
+  assert.equal(precio(await call(nuevo, [fire(20)], "La Florida")), 3990);
+  assert.equal(codigo(await call(nuevo, [saco(3)], "Valparaíso")), "A_COORDINAR");
+});
+await t("las comunas de la RM y sus localidades tienen tarifa EPS en la tabla (nada de la RM queda sin tarifa)", async () => {
+  const comunas = ["Alhué", "Buin", "Calera de Tango", "Cerrillos", "Cerro Navia", "Colina", "Conchalí", "Curacaví", "El Bosque", "El Monte", "Estación Central", "Huechuraba", "Independencia", "Isla de Maipo", "La Cisterna", "La Florida", "La Granja", "La Pintana", "La Reina", "Lampa", "Las Condes", "Lo Barnechea", "Lo Espejo", "Lo Prado", "Macul", "Maipú", "María Pinto", "Melipilla", "Ñuñoa", "Padre Hurtado", "Paine", "Pedro Aguirre Cerda", "Peñaflor", "Peñalolén", "Pirque", "Providencia", "Pudahuel", "Puente Alto", "Quilicura", "Quinta Normal", "Recoleta", "Renca", "San Bernardo", "San Joaquín", "San José de Maipo", "San Miguel", "San Ramón", "Santiago", "Talagante", "Til Til", "Vitacura", "Batuco", "Chicureo", "La Dehesa", "Las Vizcachas", "Liray", "Noviciado", "Rinconada de Maipú", "El Manzano"];
+  const sinTarifa = [];
+  for (const city of comunas) {
+    const r = await call(nuevo, planchasEPS(), city, "RM");
+    if (!r.rates.length || r.rates[0].service_code !== "EPS_FLETE") sinTarifa.push(city);
+  }
+  assert.deepEqual(sinTarifa, []);
 });
 
 for (const [s, n] of results) console.log(s, "-", n);

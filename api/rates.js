@@ -1,6 +1,9 @@
 // BPMAC — Carrier Service Unificado
 // 0. Antes de todo: validación de pedido mínimo por etiqueta (ver validarPedidoMinimo)
-// 1. Si hay planchas/perlas EPS (tipo "Aislación Térmica" o vendor ETSA) → tarifa EPS por comuna
+// 1. Si hay planchas/perlas EPS (tipo "Aislación Térmica" o vendor ETSA) → tarifa EPS por comuna,
+//    SOLO dentro de la Región Metropolitana. Fuera de la RM no se devuelve tarifa EPS ({ rates: [] }):
+//    en el perfil de envío «Transporte Carga» de la tienda este carrier es el único, así que el
+//    checkout no ofrece despacho y no se puede comprar con despacho en la web.
 // 2. Si NO hay EPS y la comuna es RM → despacho propio por zona y PESO TOTAL (Σ grams × cantidad)
 // 3. Cualquier otro caso (comuna fuera de cobertura, sin comuna, peso desconocido) →
 //    «Despacho a regiones: a coordinar (se cobra aparte)» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
@@ -192,6 +195,39 @@ const ALIAS_COMUNA = {
   "SANTIAGO CENTRO": "SANTIAGO",
   "COMUNA DE SANTIAGO": "SANTIAGO"
 };
+// Comunas de la Región Metropolitana (52) y localidades que los clientes escriben como comuna.
+// Es la misma lista que usa el agente (eps-tarifas.ts, RM_COMUNAS): si una cambia, cambia la otra.
+const RM_COMUNAS = new Set([
+  "ALHUE", "BUIN", "CALERA DE TANGO", "CERRILLOS", "CERRO NAVIA", "COLINA", "CONCHALI", "CURACAVI",
+  "EL BOSQUE", "EL MONTE", "ESTACION CENTRAL", "HUECHURABA", "INDEPENDENCIA", "ISLA DE MAIPO",
+  "LA CISTERNA", "LA FLORIDA", "LA GRANJA", "LA PINTANA", "LA REINA", "LAMPA", "LAS CONDES",
+  "LO BARNECHEA", "LO ESPEJO", "LO PRADO", "MACUL", "MAIPU", "MARIA PINTO", "MELIPILLA", "NUNOA",
+  "PADRE HURTADO", "PAINE", "PEDRO AGUIRRE CERDA", "PENAFLOR", "PENALOLEN", "PIRQUE", "PROVIDENCIA",
+  "PUDAHUEL", "PUENTE ALTO", "QUILICURA", "QUINTA NORMAL", "RECOLETA", "RENCA", "SAN BERNARDO",
+  "SAN JOAQUIN", "SAN JOSE DE MAIPO", "SAN MIGUEL", "SAN RAMON", "SANTIAGO", "TALAGANTE", "TILTIL",
+  "TIL TIL", "VITACURA",
+  "BATUCO", "CHICUREO", "LA DEHESA", "LAS VIZCACHAS", "LIRAY", "NOVICIADO", "RINCONADA DE MAIPU", "EL MANZANO"
+]);
+// Nombres que son una comuna de la RM y también un lugar de otra región: decide la región.
+const NOMBRE_COMPARTIDO = new Set(["SAN PEDRO"]);
+
+// La región que trae la dirección: «RM» (código de Shopify) o «Región Metropolitana…»; null si no dice.
+function regionDe(destination) {
+  const r = normalize(destination && destination.province);
+  if (!r) return null;
+  return r === "RM" || r.includes("METROPOLITANA") ? "RM" : r;
+}
+
+// Si la dirección está en la RM: la comuna es de la RM y la región, si la trae, también.
+// Una comuna de otra región, una comuna desconocida o una dirección que se contradice no es RM.
+function esRM(destination) {
+  const comuna = comunaDe(destination);
+  const region = regionDe(destination);
+  if (NOMBRE_COMPARTIDO.has(comuna)) return region === "RM";
+  if (!RM_COMUNAS.has(comuna)) return false;
+  return region === null || region === "RM";
+}
+
 function comunaDe(destination) {
   const c = normalize(destination && destination.city);
   return ALIAS_COMUNA[c] || c;
@@ -424,10 +460,11 @@ export default async function handler(req, res) {
 
     // ── CASO 1: Carrito con planchas/perlas EPS → tarifa EPS por comuna ──
     if (hasEPS(items)) {
-      const tarifa = TARIFAS_EPS[comunaNorm];
+      // EPS solo se despacha dentro de la RM: fuera de ella, sin tarifa (y sin «a coordinar»): no se compra con despacho.
+      const tarifa = esRM(destination) ? TARIFAS_EPS[comunaNorm] : undefined;
       if (!tarifa) {
-        log("EPS_SIN_COBERTURA");
-        return res.status(200).json({ rates: [tarifaACoordinar("Despacho de planchas EPS fuera de la tarifa por comuna | Te contactamos para coordinarlo")] });
+        log("EPS_FUERA_DE_LA_RM", { rm: esRM(destination) });
+        return res.status(200).json({ rates: [] });
       }
       return res.status(200).json({
         rates: [{
