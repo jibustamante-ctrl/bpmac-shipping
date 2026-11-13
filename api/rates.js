@@ -1,8 +1,10 @@
 // BPMAC — Carrier Service Unificado
-// 1. Si hay EPS → tarifas EPS por comuna (todo Chile)
-// 2. Si NO hay EPS y comuna es RM → tarifas despacho propio por zona + peso
-// 3. Cualquier otro caso → sin tarifa (FedEx/BlueExpress)
 // 0. Antes de todo: validación de pedido mínimo por etiqueta (ver validarPedidoMinimo)
+// 1. Si hay planchas/perlas EPS (tipo "Aislación Térmica" o vendor ETSA) → tarifa EPS por comuna
+// 2. Si NO hay EPS y la comuna es RM → despacho propio por zona y PESO TOTAL (Σ grams × cantidad)
+// 3. Cualquier otro caso (comuna fuera de cobertura, sin comuna, peso desconocido) →
+//    «Despacho a coordinar» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
+//    El código postal no se usa: la zona sale de la comuna (destination.city).
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
 const TARIFAS_EPS = {
@@ -115,16 +117,13 @@ function normalize(str) {
     .trim();
 }
  
-// Morteros + EIFS + Natstone: usan la misma tarifa plana por comuna que EPS
-// (agregado ago-2026, sucursal "Materiales de Construccion" ex-EPS)
+// Morteros + EIFS + Natstone: HASTA nov-2026 usaban la tarifa plana EPS por comuna
+// (agregado ago-2026, sucursal "Materiales de Construccion" ex-EPS). Eso cobraba lo
+// mismo por 1 saco de 25 kg que por 20, así que dejaron de ser EPS: ahora van por
+// peso (zona RM) o «a coordinar». La lista se conserva solo como referencia y NO se usa.
 //
-// EXCLUIDOS a propósito (set-2026): accesorios EIFS livianos, la membrana
-// geotextil, y los impermeabilizantes/promotores/accesorios de acabado.
-// Son artículos de bajo peso que no requieren camión de carga; forzarlos
-// a la tarifa plana EPS daba fletes irracionales (ej: geotextil de 2 kg
-// pagando la misma tarifa que un despacho de sacos de mortero). Quedan
-// fuera del modelo EPS: usan despacho normal (FedEx/BlueExpress fuera de
-// RM, tarifa por peso dentro de RM).
+// (Antes, además, se EXCLUÍAN de ese modelo los accesorios EIFS livianos, la membrana
+// geotextil y los impermeabilizantes/promotores/accesorios de acabado.)
 //   - 8679131382016 Esquinero Malla Fibra de Vidrio PVC para EIFS 2,5 mts
 //   - 8679133643008 Perfil Cortagotas con malla para EIFS Natstone 2 mts
 //   - 9398209544448 Arandela EIFS para Fijación 5 cm gris 100 un DVP
@@ -139,7 +138,8 @@ function normalize(str) {
 //   - 9028622811392 Cinta para juntas tabiquería 5 cm x 45 mt Natstone
 //   - 9441584808192 Promotor de Adherencia Estucos M Juego 30 kg Natstone
 //   - 9470937071872 Promotor de Adherencia Bicomponente para Piedras NatStone Juego 30 KG
-const IDS_MORTERO_EIFS_NATSTONE = new Set([
+// eslint-disable-next-line no-unused-vars
+const IDS_MORTERO_EIFS_NATSTONE_REFERENCIA = new Set([
   "8679367377152", "8679449821440", "8832759529728", "9167909585152",
   "9385245278464", "9388001001728", "9388002443520", "9429018444032",
   "9167902474496", "9319431831808", "9459425476864",
@@ -160,19 +160,58 @@ const IDS_EXCLUIDOS_EPS = new Set([
   "8881357095168"
 ]);
  
+// EPS = planchas/perlas de poliestireno: tipo "Aislación Térmica" o vendor ETSA.
+// Morteros, adhesivos y sacos NO son EPS: se despachan por peso.
+function esEPS(i) {
+  if (IDS_EXCLUIDOS_EPS.has(String(i.product_id))) return false;
+  return i.product_type === "Aislación Térmica" || i.vendor === "ETSA";
+}
 function hasEPS(items) {
-  return items.some(i => {
-    if (IDS_EXCLUIDOS_EPS.has(String(i.product_id))) return false;
-    return (
-      i.product_type === "Aislación Térmica" ||
-      i.vendor === "ETSA" ||
-      IDS_MORTERO_EIFS_NATSTONE.has(String(i.product_id))
-    );
-  });
+  return items.some(esEPS);
+}
+
+// Peso total del carrito en gramos: Σ grams × cantidad. `grams` es el peso de UNA unidad.
+// Si algún artículo no trae peso, el total no es fiable: se devuelve con `incompleto`.
+function pesoTotal(items) {
+  let gramos = 0, incompleto = false;
+  for (const i of items) {
+    const g = Number(i.grams), q = Number(i.quantity);
+    if (!(g > 0) || !(q > 0)) { incompleto = true; continue; }
+    gramos += g * q;
+  }
+  return { gramos, incompleto };
+}
+
+// Nombres de comuna que Shopify o el cliente escriben distinto a como están en las tablas.
+const ALIAS_COMUNA = {
+  "SAN FRANCISCO DE MOSTAZAL": "SAN FCO DE MOSTAZAL",
+  "SAN VICENTE DE TAGUA TAGUA": "SAN VICENTE DE TT",
+  "SAN VICENTE": "SAN VICENTE DE TT",
+  "VINA": "VINA DEL MAR",
+  "STGO": "SANTIAGO",
+  "SANTIAGO CENTRO": "SANTIAGO",
+  "COMUNA DE SANTIAGO": "SANTIAGO"
+};
+function comunaDe(destination) {
+  const c = normalize(destination && destination.city);
+  return ALIAS_COMUNA[c] || c;
+}
+
+// Sin tarifa conocida: el despacho se coordina con el ejecutivo (no se deja al cliente sin opción).
+function tarifaACoordinar(motivo) {
+  return {
+    service_name: "Despacho a coordinar",
+    service_code: "A_COORDINAR",
+    total_price: "0",
+    currency: "CLP",
+    min_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
+    max_delivery_date: new Date(Date.now() + 7 * 86400000).toISOString(),
+    description: motivo || "Te contactamos para coordinar el despacho y su costo"
+  };
 }
  
 function getZona(comuna) {
-  const c = normalize(comuna);
+  const c = ALIAS_COMUNA[normalize(comuna)] || normalize(comuna);
   if (ZONA1.includes(c)) return "ZONA1";
   if (ZONA2.includes(c)) return "ZONA2";
   if (ZONA3.includes(c)) return "ZONA3";
@@ -364,8 +403,8 @@ export default async function handler(req, res) {
   try {
     const { rate } = req.body;
     const { destination, items } = rate;
-    const ciudad = destination.city || "";
-    const comunaNorm = normalize(ciudad);
+    const ciudad = (destination && destination.city) || "";
+    const comunaNorm = comunaDe(destination);
  
     // ── PEDIDO MÍNIMO: si no se cumple, sin tarifas → no se puede pagar ──
     // MIN_ORDER_ENFORCE=true bloquea; cualquier otro valor = modo observación (solo log).
@@ -381,10 +420,15 @@ export default async function handler(req, res) {
     }
     if (rechazo && enforce) return res.status(200).json({ rates: [] });
  
-    // ── CASO 1: Carrito con EPS → tarifas EPS ────────────────────────────
+    const log = (event, extra) => console.log(JSON.stringify({ event, comuna: ciudad, region: destination && destination.province, ...extra }));
+
+    // ── CASO 1: Carrito con planchas/perlas EPS → tarifa EPS por comuna ──
     if (hasEPS(items)) {
       const tarifa = TARIFAS_EPS[comunaNorm];
-      if (!tarifa) return res.status(200).json({ rates: [] });
+      if (!tarifa) {
+        log("EPS_SIN_COBERTURA");
+        return res.status(200).json({ rates: [tarifaACoordinar("Despacho de planchas EPS fuera de la tarifa por comuna | Te contactamos para coordinarlo")] });
+      }
       return res.status(200).json({
         rates: [{
           service_name: `Envío EPS a ${ciudad}`,
@@ -397,13 +441,19 @@ export default async function handler(req, res) {
         }]
       });
     }
- 
-    // ── CASO 2: Sin EPS, comuna RM → tarifas despacho propio ─────────────
+
+    // ── CASO 2: Sin EPS, comuna RM → despacho propio por zona y peso total ──
     const zona = getZona(ciudad);
     if (zona) {
-      const pesoTotal = items.reduce((sum, i) => sum + ((i.grams || 0) * i.quantity), 0);
-      const tarifa = calcularTarifaRM(zona, pesoTotal);
-      if (!tarifa) return res.status(200).json({ rates: [] });
+      const { gramos, incompleto } = pesoTotal(items);
+      if (gramos <= 0) {
+        // Ningún artículo trae peso: cobrar el primer tramo sería regalar el flete.
+        log("SIN_PESO", { items: items.map(i => ({ product_id: i.product_id, grams: i.grams, quantity: i.quantity })) });
+        return res.status(200).json({ rates: [tarifaACoordinar("Despacho a coordinar con tu ejecutivo")] });
+      }
+      if (incompleto) log("PESO_INCOMPLETO", { gramos, items: items.map(i => ({ product_id: i.product_id, grams: i.grams, quantity: i.quantity })) });
+      const tarifa = calcularTarifaRM(zona, gramos);
+      if (!tarifa) return res.status(200).json({ rates: [tarifaACoordinar()] });
       const zonaLabel = zona === "ZONA1" ? "Zona 1" : zona === "ZONA2" ? "Zona 2" : "Zona 3";
       return res.status(200).json({
         rates: [{
@@ -413,22 +463,17 @@ export default async function handler(req, res) {
           currency: "CLP",
           min_delivery_date: new Date(Date.now() + 1 * 86400000).toISOString(),
           max_delivery_date: new Date(Date.now() + 4 * 86400000).toISOString(),
-          description: descripcionRM(pesoTotal)
+          description: descripcionRM(gramos)
         }]
       });
     }
- 
-    // ── CASO 3: Fuera de RM sin EPS → FedEx/BlueExpress ──────────────────
-    return res.status(200).json({ rates: [] });
- 
+
+    // ── CASO 3: Sin EPS y comuna sin zona (regiones, comuna vacía o desconocida) → a coordinar ──
+    log("FUERA_DE_COBERTURA");
+    return res.status(200).json({ rates: [tarifaACoordinar()] });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Error interno" });
   }
 }
- 
- 
- 
-
-
-

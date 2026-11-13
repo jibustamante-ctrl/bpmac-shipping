@@ -83,9 +83,75 @@ await t("soporte de tina + huincha → igual que antes", async () => igualAntes(
 await t("planchas ≥ mínimo + 2 perlas (< 6) → [] (cada regla se evalúa)", async () => vacio(await call(nuevo, [it(PLANCHA, 200000, 1), it(PERLAS, 18990, 2)])));
 await t("planchas bajo mínimo + huincha (no suma) → []", async () => vacio(await call(nuevo, [it(PLANCHA, 130000, 1), it(HUINCHA, 59990, 1)])));
 await t("planchas + otros pero planchas ≥ 180.000 → tarifas", async () => conTarifas(await call(nuevo, [it(PLANCHA, 180000, 1), otro(10000)])));
-await t("comuna sin tarifa EPS con planchas sobre mínimo → [] (como antes)", async () => {
-  const items = [it(PLANCHA, 200000, 1)];
-  assert.deepEqual(await call(nuevo, items, "Lugar Inexistente"), await call(original, items, "Lugar Inexistente"));
+await t("comuna sin tarifa EPS con planchas sobre mínimo → «a coordinar» (antes: [])", async () => {
+  const r = await call(nuevo, [it(PLANCHA, 200000, 1)], "Lugar Inexistente");
+  assert.equal(r.rates.length, 1); assert.equal(r.rates[0].service_code, "A_COORDINAR"); assert.equal(r.rates[0].total_price, "0");
+});
+
+// ── Tarifas por peso (fix-tarifas-peso) ──
+const FIRE = "9514755817728", SOUDA = "8831055397120", SACO = "8511495799040", PLANCHA_REAL = "8867337044224";
+const kg = (id, name, grams, q, price, vendor, type) => ({ product_id: id, variant_id: 1, name, quantity: q, price: price * 100, grams, vendor, product_type: type });
+const fire = q => kg(FIRE, "Firecryl", 300, q, 6990, "Soudal", "Sellador Cortafuego");
+const souda = q => kg(SOUDA, "Soudaflex 40FC 600 ml", 800, q, 9990, "Soudal", "Sellador de poliuretano");
+const saco = q => kg(SACO, "Base Coat Natstone 25 kg", 25000, q, 14990, "Natstone", "Adhesivo EIFS");
+const precio = r => { assert.equal(r.rates.length, 1, JSON.stringify(r)); return Number(r.rates[0].total_price) / 100; };
+const codigo = r => r.rates[0].service_code;
+
+await t("peso = Σ grams × cantidad: los tramos de La Florida (Zona 2) suben con las unidades de Firecryl (0,3 kg c/u)", async () => {
+  const p = async q => precio(await call(nuevo, [fire(q)], "La Florida"));
+  assert.equal(await p(1), 3990);    // 0,3 kg
+  assert.equal(await p(83), 3990);   // 24,9 kg: último del primer tramo (≤ 25 kg)
+  assert.equal(await p(84), 4990);   // 25,2 kg → ≤ 40 kg
+  assert.equal(await p(134), 6990);  // 40,2 kg → ≤ 100 kg
+  assert.equal(await p(200), 6990);  // 60 kg
+  assert.equal(await p(500), 9990);  // 150 kg → ≤ 300 kg
+});
+await t("30 Soudaflex 40FC 600 ml (24 kg) a Pudahuel → tramo ≤ 25 kg; 40 (32 kg) → ≤ 40 kg; 200 (160 kg) → ≤ 300 kg", async () => {
+  assert.equal(precio(await call(nuevo, [souda(30)], "Pudahuel")), 3990);
+  assert.equal(precio(await call(nuevo, [souda(40)], "Pudahuel")), 4990);
+  assert.equal(precio(await call(nuevo, [souda(200)], "Pudahuel")), 9990);
+});
+await t("sacos de 25 kg ya no son EPS: 1 → $3.990, 3 → $6.990, 20 → $24.990 (La Florida)", async () => {
+  for (const [q, esperado] of [[1, 3990], [3, 6990], [20, 24990]]) {
+    const r = await call(nuevo, [saco(q)], "La Florida");
+    assert.equal(precio(r), esperado, `${q} sacos`); assert.notEqual(codigo(r), "EPS_FLETE");
+  }
+});
+await t("sacos en Zona 1 y Zona 3 usan su propia tabla", async () => {
+  assert.equal(precio(await call(nuevo, [saco(1)], "San Miguel")), 3490);
+  assert.equal(precio(await call(nuevo, [saco(1)], "Colina")), 6990);
+});
+await t("planchas EPS a La Florida siguen con su tarifa EPS ($14.990) sobre el mínimo", async () => {
+  const r = await call(nuevo, [kg(PLANCHA_REAL, "Plancha Aislapol", 3750, 30, 6990, "ETSA", "Aislación Térmica")], "La Florida");
+  assert.equal(precio(r), 14990); assert.equal(codigo(r), "EPS_FLETE");
+});
+await t("planchas EPS bajo el pedido mínimo siguen bloqueadas (regla de negocio, no cambió)", async () => {
+  vacio(await call(nuevo, [kg(PLANCHA_REAL, "Plancha Aislapol", 3750, 10, 6990, "ETSA", "Aislación Térmica")], "La Florida"));
+});
+await t("Concepción (fuera de cobertura) → «Despacho a coordinar» $0 en vez de []", async () => {
+  const r = await call(nuevo, [fire(20)], "Concepción");
+  assert.equal(codigo(r), "A_COORDINAR"); assert.equal(precio(r), 0);
+});
+await t("sin código postal la zona sale de la comuna (el CP nunca se usa)", async () => {
+  assert.equal(precio(await call(nuevo, [fire(20)], "La Florida")), 3990);
+});
+await t("sin comuna (ni CP) → «a coordinar»", async () => {
+  assert.equal(codigo(await call(nuevo, [fire(20)], "")), "A_COORDINAR");
+});
+await t("ningún artículo con peso → «a coordinar» (no regala el primer tramo)", async () => {
+  const sinPeso = { ...fire(5), grams: 0 };
+  const logs = [], ol = console.log; console.log = l => logs.push(l);
+  let r; try { r = await call(nuevo, [sinPeso], "La Florida"); } finally { console.log = ol; }
+  assert.equal(codigo(r), "A_COORDINAR"); assert.ok(logs.some(l => l.includes("SIN_PESO")));
+});
+await t("un artículo sin peso entre otros con peso: se cobra el peso conocido y se registra PESO_INCOMPLETO", async () => {
+  const logs = [], ol = console.log; console.log = l => logs.push(l);
+  let r; try { r = await call(nuevo, [saco(3), { ...fire(5), grams: 0 }], "La Florida"); } finally { console.log = ol; }
+  assert.equal(precio(r), 6990); assert.ok(logs.some(l => l.includes("PESO_INCOMPLETO")));
+});
+await t("alias de comuna: «San Francisco de Mostazal» con EPS", async () => {
+  const r = await call(nuevo, [kg(PLANCHA_REAL, "Plancha", 3750, 60, 6990, "ETSA", "Aislación Térmica")], "San Francisco de Mostazal");
+  assert.equal(precio(r), 174500);
 });
 await t("caché: segunda llamada con mismos IDs no vuelve a consultar Shopify", async () => {
   const antes = fetchCalls;
