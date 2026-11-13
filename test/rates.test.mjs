@@ -128,9 +128,10 @@ await t("planchas EPS a La Florida siguen con su tarifa EPS ($14.990) sobre el m
 await t("planchas EPS bajo el pedido mínimo siguen bloqueadas (regla de negocio, no cambió)", async () => {
   vacio(await call(nuevo, [kg(PLANCHA_REAL, "Plancha Aislapol", 3750, 10, 6990, "ETSA", "Aislación Térmica")], "La Florida"));
 });
-await t("Concepción (fuera de cobertura) → «Despacho a coordinar» $0 en vez de []", async () => {
+await t("Concepción (fuera de cobertura) → «Despacho a regiones: a coordinar (se cobra aparte)» $0 en vez de []", async () => {
   const r = await call(nuevo, [fire(20)], "Concepción");
   assert.equal(codigo(r), "A_COORDINAR"); assert.equal(precio(r), 0);
+  assert.equal(r.rates[0].service_name, "Despacho a regiones: a coordinar (se cobra aparte)");
 });
 await t("sin código postal la zona sale de la comuna (el CP nunca se usa)", async () => {
   assert.equal(precio(await call(nuevo, [fire(20)], "La Florida")), 3990);

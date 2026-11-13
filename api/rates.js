@@ -3,7 +3,7 @@
 // 1. Si hay planchas/perlas EPS (tipo "Aislación Térmica" o vendor ETSA) → tarifa EPS por comuna
 // 2. Si NO hay EPS y la comuna es RM → despacho propio por zona y PESO TOTAL (Σ grams × cantidad)
 // 3. Cualquier otro caso (comuna fuera de cobertura, sin comuna, peso desconocido) →
-//    «Despacho a coordinar» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
+//    «Despacho a regiones: a coordinar (se cobra aparte)» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
 //    El código postal no se usa: la zona sale de la comuna (destination.city).
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
@@ -200,7 +200,7 @@ function comunaDe(destination) {
 // Sin tarifa conocida: el despacho se coordina con el ejecutivo (no se deja al cliente sin opción).
 function tarifaACoordinar(motivo) {
   return {
-    service_name: "Despacho a coordinar",
+    service_name: "Despacho a regiones: a coordinar (se cobra aparte)",
     service_code: "A_COORDINAR",
     total_price: "0",
     currency: "CLP",
