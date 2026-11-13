@@ -29,6 +29,15 @@ POST /admin/api/2024-01/carrier_services.json
 }
 ```
 
+## Despliegue
+
+**Cada push a `main` despliega solo a producción.** El proyecto de Vercel (`bpmac-shipping`) está conectado por Git a `jibustamante-ctrl/bpmac-shipping`, con `main` como rama de producción: al subir un commit a `main`, Vercel construye y publica en `https://bpmac-shipping.vercel.app` (la URL que usa el carrier service de Shopify). Las demás ramas generan solo despliegues de vista previa.
+
+- **No hace falta `vercel deploy --prod`**: hacerlo además del push crea un segundo despliegue de producción del mismo commit (un duplicado).
+- **Antes de hacer push a `main`, corre las pruebas** (`node test/rates.test.mjs`): lo que llega a `main` queda en vivo en menos de un minuto.
+- **Verificar en vivo**: `POST https://bpmac-shipping.vercel.app/api/rates` con un carrito de prueba (ver los casos de `test/rates.test.mjs`).
+- **Volver atrás**: `vercel rollback <url-del-despliegue-anterior>` (se ven con `vercel ls`), o revertir el commit en `main`, que despliega de nuevo.
+
 ## Cómo funciona
 - Shopify envía el carrito al endpoint cuando el cliente llega a shipping.
 - **Planchas/perlas EPS** (`product_type = "Aislación Térmica"` o vendor `ETSA`): tarifa fija por comuna (`TARIFAS_EPS`).
