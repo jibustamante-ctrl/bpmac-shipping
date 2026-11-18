@@ -246,6 +246,51 @@ await t("las comunas de la RM y sus localidades tienen tarifa EPS en la tabla (n
   }
   assert.deepEqual(sinTarifa, []);
 });
+const ZIPS = ["8900000", "8940000", "8460000", "8780000", "8860000", "7970000", "9120000", "8320000", "9200000", "9160000", "8240000", "7810000", "8010000", "7500000", "7750000", "8980000", "9080000", "8380000", "8500000", "8820000", "9250000", "8050000", "8420000", "7850000", "8540000", "7910000", "8150000", "9020000", "8640000", "7630000", "7550000", "8580000", "9710000", "9560000", "8700000", "9480000", "7690000", "9750000", "9500000", "9460000", "9670000", "9380000", "9340000", "9790000", "9540000", "9810000", "9630000", "9620000", "9420000", "9580000", "9650000", "9660000"];
+
+// ── Comuna deducida del código postal / región como código o nombre ──
+async function llamarDest(destination, items) {
+  let out;
+  const res = { setHeader() {}, status(c) { this.code = c; return this; }, json(b) { out = b; return this; }, end() {} };
+  await handlerDest(nuevo, destination, items, res, v => (out = v));
+  return out;
+}
+async function handlerDest(h, destination, items, res, set) {
+  const r = { setHeader() {}, status() { return this; }, json: set, end() {} };
+  await h({ method: "POST", body: { rate: { destination, items } } }, r);
+}
+const SACO1 = [otro(30000, 1)]; // mortero 1 kg → Zona 1/2/3 por tramo de peso (1000 g)
+const codigoDe = r => r.rates.length ? r.rates[0].service_code : "(vacío)";
+await t("RM con comuna → tarifa por zona", async () => assert.equal(codigoDe(await llamarDest({ city: "Maipú", province: "RM" }, SACO1)), "BPMAC_RM_ZONA2"));
+await t("RM con comuna y región como nombre de Shopify → tarifa por zona", async () => assert.equal(codigoDe(await llamarDest({ city: "Maipú", province: "Región Metropolitana de Santiago" }, SACO1)), "BPMAC_RM_ZONA2"));
+await t("RM solo con CP (8900000 San Miguel) y región código → Zona 1", async () => assert.equal(codigoDe(await llamarDest({ zip: "8900000", province: "RM" }, SACO1)), "BPMAC_RM_ZONA1"));
+await t("RM solo con CP y región «Región Metropolitana de Santiago» → Zona 1", async () => assert.equal(codigoDe(await llamarDest({ postal_code: "8900000", province: "Región Metropolitana de Santiago" }, SACO1)), "BPMAC_RM_ZONA1"));
+await t("CP de la RM sin región → tarifa por zona (Colina → Zona 3)", async () => assert.equal(codigoDe(await llamarDest({ zip: "9340000" }, SACO1)), "BPMAC_RM_ZONA3"));
+await t("CP con espacio/guion y sin comuna (Las Condes 755 0000)", async () => assert.equal(codigoDe(await llamarDest({ zip: "755-0000", province: "RM" }, SACO1)), "BPMAC_RM_ZONA2"));
+await t("RM con CP y comuna sin reconocer → usa el CP", async () => assert.equal(codigoDe(await llamarDest({ city: "Sector X", zip: "8900000", province: "RM" }, SACO1)), "BPMAC_RM_ZONA1"));
+await t("la comuna escrita manda sobre el CP si es conocida", async () => assert.equal(codigoDe(await llamarDest({ city: "Colina", zip: "8900000", province: "RM" }, SACO1)), "BPMAC_RM_ZONA3"));
+await t("RM sin comuna ni CP → [] (sin $0 de regiones)", async () => vacio(await llamarDest({ province: "RM" }, SACO1)));
+await t("«Región Metropolitana de Santiago» sin comuna ni CP → []", async () => vacio(await llamarDest({ province: "Región Metropolitana de Santiago", city: "" }, SACO1)));
+await t("RM con CP inválido y sin comuna → []", async () => vacio(await llamarDest({ province: "RM", zip: "123" }, SACO1)));
+await t("RM con CP desconocido y sin comuna → []", async () => vacio(await llamarDest({ province: "RM", zip: "5990000" }, SACO1)));
+await t("regiones (Valparaíso, nombre) con comuna → a coordinar", async () => assert.equal(codigoDe(await llamarDest({ city: "Viña del Mar", province: "Valparaíso" }, SACO1)), "A_COORDINAR"));
+await t("regiones (VS, código) solo con CP → a coordinar", async () => assert.equal(codigoDe(await llamarDest({ zip: "2520000", province: "VS" }, SACO1)), "A_COORDINAR"));
+await t("sin región ni comuna ni CP → a coordinar (como antes)", async () => assert.equal(codigoDe(await llamarDest({}, SACO1)), "A_COORDINAR"));
+await t("EPS: RM solo con CP → tarifa EPS de la comuna ($14.990 San Miguel)", async () => {
+  const r = await llamarDest({ zip: "8900000", province: "RM" }, planchasEPS());
+  assert.equal(r.rates[0].service_code, "EPS_FLETE"); assert.equal(r.rates[0].total_price, "1499000");
+});
+await t("EPS: RM sin comuna ni CP → []", async () => vacio(await llamarDest({ province: "RM" }, planchasEPS())));
+await t("EPS: regiones solo con CP → [] (como antes)", async () => vacio(await llamarDest({ zip: "2520000", province: "Valparaíso" }, planchasEPS())));
+await t("San Pedro: CP RM (9660000) con región RM → tarifa EPS RM; con región Valparaíso → []", async () => {
+  assert.equal((await llamarDest({ zip: "9660000", province: "RM" }, planchasEPS())).rates[0].service_code, "EPS_FLETE");
+  vacio(await llamarDest({ city: "San Pedro", province: "Valparaíso" }, planchasEPS()));
+});
+await t("las 52 comunas del CP de la tabla resuelven y no devuelven vacío en RM", async () => {
+  const malas = [];
+  for (const zip of ZIPS) { const r = await llamarDest({ zip, province: "RM" }, SACO1); if (!r.rates.length) malas.push(zip); }
+  assert.deepEqual(malas, []);
+});
 
 for (const [s, n] of results) console.log(s, "-", n);
 const fails = results.filter(r => r[0] === "FAIL").length;

@@ -7,7 +7,7 @@
 // 2. Si NO hay EPS y la comuna es RM → despacho propio por zona y PESO TOTAL (Σ grams × cantidad)
 // 3. Cualquier otro caso (comuna fuera de cobertura, sin comuna, peso desconocido) →
 //    «Despacho a regiones: a coordinar (se cobra aparte)» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
-//    El código postal no se usa: la zona sale de la comuna (destination.city).
+//    La comuna sale de destination.city o, si falta, del código postal (RM). Región RM sin comuna ni CP → { rates: [] }.
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
 const TARIFAS_EPS = {
@@ -187,6 +187,7 @@ function pesoTotal(items) {
 
 // Nombres de comuna que Shopify o el cliente escriben distinto a como están en las tablas.
 const ALIAS_COMUNA = {
+  "TILTIL": "TIL TIL",
   "SAN FRANCISCO DE MOSTAZAL": "SAN FCO DE MOSTAZAL",
   "SAN VICENTE DE TAGUA TAGUA": "SAN VICENTE DE TT",
   "SAN VICENTE": "SAN VICENTE DE TT",
@@ -211,26 +212,98 @@ const RM_COMUNAS = new Set([
 // Nombres que son una comuna de la RM y también un lugar de otra región: decide la región.
 const NOMBRE_COMPARTIDO = new Set(["SAN PEDRO"]);
 
-// La región que trae la dirección: «RM» (código de Shopify) o «Región Metropolitana…»; null si no dice.
+// Código postal (7 dígitos) → comuna, solo Región Metropolitana. Misma tabla que el selector de comuna
+// del tema (snippet bpmac-location-picker): si una cambia, cambia la otra.
+const ZIP_RM = {
+  "8900000": "San Miguel",
+  "8940000": "San Joaquín",
+  "8460000": "Pedro Aguirre Cerda",
+  "8780000": "La Granja",
+  "8860000": "San Ramón",
+  "7970000": "La Cisterna",
+  "9120000": "Lo Espejo",
+  "8320000": "Santiago",
+  "9200000": "Cerrillos",
+  "9160000": "Estación Central",
+  "8240000": "La Florida",
+  "7810000": "Macul",
+  "8010000": "El Bosque",
+  "7500000": "Providencia",
+  "7750000": "Ñuñoa",
+  "8980000": "Lo Prado",
+  "9080000": "Cerro Navia",
+  "8380000": "Independencia",
+  "8500000": "Quinta Normal",
+  "8820000": "La Pintana",
+  "9250000": "Maipú",
+  "8050000": "San Bernardo",
+  "8420000": "Recoleta",
+  "7850000": "La Reina",
+  "8540000": "Conchalí",
+  "7910000": "Peñalolén",
+  "8150000": "Puente Alto",
+  "9020000": "Pudahuel",
+  "8640000": "Renca",
+  "7630000": "Vitacura",
+  "7550000": "Las Condes",
+  "8580000": "Huechuraba",
+  "9710000": "Padre Hurtado",
+  "9560000": "Calera de Tango",
+  "8700000": "Quilicura",
+  "9480000": "Pirque",
+  "7690000": "Lo Barnechea",
+  "9750000": "Peñaflor",
+  "9500000": "Buin",
+  "9460000": "San José de Maipo",
+  "9670000": "Talagante",
+  "9380000": "Lampa",
+  "9340000": "Colina",
+  "9790000": "Isla de Maipo",
+  "9540000": "Paine",
+  "9810000": "El Monte",
+  "9630000": "Curacaví",
+  "9620000": "María Pinto",
+  "9420000": "Tiltil",
+  "9580000": "Melipilla",
+  "9650000": "Alhué",
+  "9660000": "San Pedro"
+};
+
+// Código postal de la dirección en 7 dígitos (Shopify puede traerlo con espacios o guion); null si no sirve.
+function zipDe(destination) {
+  const z = String((destination && destination.zip) || (destination && destination.postal_code) || "").replace(/\D/g, "");
+  return z.length === 7 ? z : null;
+}
+
+// La región que trae la dirección: «RM» (código de Shopify) o «Región Metropolitana de Santiago»;
+// null si no dice; otro nombre («Valparaíso», «VS»…) tal cual, normalizado.
 function regionDe(destination) {
   const r = normalize(destination && destination.province);
   if (!r) return null;
   return r === "RM" || r.includes("METROPOLITANA") ? "RM" : r;
 }
 
-// Si la dirección está en la RM: la comuna es de la RM y la región, si la trae, también.
-// Una comuna de otra región, una comuna desconocida o una dirección que se contradice no es RM.
-function esRM(destination) {
-  const comuna = comunaDe(destination);
-  const region = regionDe(destination);
-  if (NOMBRE_COMPARTIDO.has(comuna)) return region === "RM";
-  if (!RM_COMUNAS.has(comuna)) return false;
-  return region === null || region === "RM";
-}
-
 function comunaDe(destination) {
   const c = normalize(destination && destination.city);
   return ALIAS_COMUNA[c] || c;
+}
+
+// Resuelve el destino: comuna (la escrita, o la deducida del código postal si falta o no se reconoce),
+// si está en la RM y, si es RM sin comuna conocida, `rmSinComuna` (no se puede calcular tarifa).
+function resolverDestino(destination) {
+  const region = regionDe(destination);
+  const zip = zipDe(destination);
+  const comunaZip = zip && ZIP_RM[zip] ? normalize(ZIP_RM[zip]) : null;
+  let comuna = comunaDe(destination);
+  const reconocida = RM_COMUNAS.has(comuna) || ALIAS_COMUNA[comuna] !== undefined || TARIFAS_EPS[comuna] !== undefined;
+  if (comunaZip && (!comuna || !reconocida)) comuna = ALIAS_COMUNA[comunaZip] || comunaZip;
+  // RM: la comuna es de la RM y la región, si la trae, también. «San Pedro» existe en otra región: la decide
+  // la región, o el CP si no hay región.
+  const comunaEsRM = NOMBRE_COMPARTIDO.has(comuna) ? (region === "RM" || (region === null && comunaZip === comuna)) : RM_COMUNAS.has(comuna);
+  const rm = comunaEsRM && (region === null || region === "RM");
+  // Región RM pero sin comuna utilizable (vacía o no reconocida): no se sabe qué tarifa corresponde.
+  const rmSinComuna = region === "RM" && !rm && (!comuna || !reconocida);
+  return { comuna, rm, rmSinComuna, region };
 }
 
 // Sin tarifa conocida: el despacho se coordina con el ejecutivo (no se deja al cliente sin opción).
@@ -439,8 +512,10 @@ export default async function handler(req, res) {
   try {
     const { rate } = req.body;
     const { destination, items } = rate;
-    const ciudad = (destination && destination.city) || "";
-    const comunaNorm = comunaDe(destination);
+    const dest = resolverDestino(destination);
+    const comunaNorm = dest.comuna;
+    // Nombre para mostrar: lo que escribió el cliente o, si faltaba, la comuna deducida del código postal.
+    const ciudad = (destination && destination.city) || (dest.rm ? (ZIP_RM[zipDe(destination)] || comunaNorm) : "");
  
     // ── PEDIDO MÍNIMO: si no se cumple, sin tarifas → no se puede pagar ──
     // MIN_ORDER_ENFORCE=true bloquea; cualquier otro valor = modo observación (solo log).
@@ -461,9 +536,9 @@ export default async function handler(req, res) {
     // ── CASO 1: Carrito con planchas/perlas EPS → tarifa EPS por comuna ──
     if (hasEPS(items)) {
       // EPS solo se despacha dentro de la RM: fuera de ella, sin tarifa (y sin «a coordinar»): no se compra con despacho.
-      const tarifa = esRM(destination) ? TARIFAS_EPS[comunaNorm] : undefined;
+      const tarifa = dest.rm ? TARIFAS_EPS[comunaNorm] : undefined;
       if (!tarifa) {
-        log("EPS_FUERA_DE_LA_RM", { rm: esRM(destination) });
+        log("EPS_FUERA_DE_LA_RM", { rm: dest.rm });
         return res.status(200).json({ rates: [] });
       }
       return res.status(200).json({
@@ -479,8 +554,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // ── RM sin comuna (ni deducible del CP): no se devuelve la tarifa de regiones ni $0 → sin tarifas
+    //    hasta que el cliente indique comuna o código postal. ──
+    if (dest.rmSinComuna) {
+      log("RM_SIN_COMUNA", { zip: zipDe(destination) });
+      return res.status(200).json({ rates: [] });
+    }
+
     // ── CASO 2: Sin EPS, comuna RM → despacho propio por zona y peso total ──
-    const zona = getZona(ciudad);
+    const zona = getZona(comunaNorm);
     if (zona) {
       const { gramos, incompleto } = pesoTotal(items);
       if (gramos <= 0) {
