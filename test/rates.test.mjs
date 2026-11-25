@@ -127,10 +127,12 @@ await t("planchas EPS a La Florida siguen con su tarifa EPS ($14.990) sobre el m
 await t("planchas EPS bajo el pedido mínimo siguen bloqueadas (regla de negocio, no cambió)", async () => {
   vacio(await call(nuevo, [kg(PLANCHA_REAL, "Plancha Aislapol", 3750, 10, 6990, "ETSA", "Aislación Térmica")], "La Florida"));
 });
-await t("Concepción (fuera de cobertura) → «Despacho a regiones: a coordinar (se cobra aparte)» $0 en vez de []", async () => {
+await t("Concepción (fuera de cobertura) → «Despacho a regiones · por cotizar» $0, con su descripción y nunca «se cobra aparte»", async () => {
   const r = await call(nuevo, [fire(20)], "Concepción");
   assert.equal(codigo(r), "A_COORDINAR"); assert.equal(precio(r), 0);
-  assert.equal(r.rates[0].service_name, "Despacho a regiones: a coordinar (se cobra aparte)");
+  assert.equal(r.rates[0].service_name, "Despacho a regiones · por cotizar");
+  assert.equal(r.rates[0].description, "Tu ejecutivo te envía el valor del flete por WhatsApp antes de despachar.");
+  assert.ok(!/se cobra aparte/i.test(JSON.stringify(r)));
 });
 await t("sin código postal la zona sale de la comuna (el CP nunca se usa)", async () => {
   assert.equal(precio(await call(nuevo, [fire(20)], "La Florida")), 3990);
@@ -138,16 +140,36 @@ await t("sin código postal la zona sale de la comuna (el CP nunca se usa)", asy
 await t("sin comuna (ni CP) → «a coordinar»", async () => {
   assert.equal(codigo(await call(nuevo, [fire(20)], "")), "A_COORDINAR");
 });
-await t("ningún artículo con peso → «a coordinar» (no regala el primer tramo)", async () => {
-  const sinPeso = { ...fire(5), grams: 0 };
+await t("V59: RM con un artículo de peso 0 → tarifa normal de la zona con el peso mínimo por unidad (no «a coordinar») y se registra el SKU", async () => {
+  const sinPeso = { ...fire(5), grams: 0, sku: "1120530" };
   const logs = [], ol = console.log; console.log = l => logs.push(l);
   let r; try { r = await call(nuevo, [sinPeso], "La Florida"); } finally { console.log = ol; }
-  assert.equal(codigo(r), "A_COORDINAR"); assert.ok(logs.some(l => l.includes("SIN_PESO")));
+  assert.equal(codigo(r), "BPMAC_RM_ZONA2"); assert.equal(precio(r), 3990);
+  const log = logs.map(l => { try { return JSON.parse(l); } catch { return {}; } }).find(l => l.event === "SIN_PESO");
+  assert.ok(log, "se registra SIN_PESO"); assert.equal(log.items[0].sku, "1120530"); assert.equal(log.peso_minimo_unidad, 500);
 });
-await t("un artículo sin peso entre otros con peso: se cobra el peso conocido y se registra PESO_INCOMPLETO", async () => {
+await t("V59: el caso real (Cinta Pretul CDU-50P ×8, peso 0, San Miguel) da «Despacho BPMAC · San Miguel (Zona 1)»", async () => {
+  const cinta = { ...fire(8), grams: 0, sku: "1120530", variant_id: 51146486546688 };
+  const r = await call(nuevo, [cinta], "San Miguel");
+  assert.equal(r.rates[0].service_name, "Despacho BPMAC · San Miguel (Zona 1)");
+  assert.ok(precio(r) > 0);
+});
+await t("V59: un artículo sin peso entre otros con peso suma el peso mínimo y se registra SIN_PESO", async () => {
   const logs = [], ol = console.log; console.log = l => logs.push(l);
   let r; try { r = await call(nuevo, [saco(3), { ...fire(5), grams: 0 }], "La Florida"); } finally { console.log = ol; }
-  assert.equal(precio(r), 6990); assert.ok(logs.some(l => l.includes("PESO_INCOMPLETO")));
+  assert.equal(precio(r), 6990); assert.ok(logs.some(l => l.includes("SIN_PESO")));
+});
+await t("V59: región (Concepción) con peso 0 → «Despacho a regiones · por cotizar»", async () => {
+  const r = await call(nuevo, [{ ...fire(5), grams: 0 }], "Concepción");
+  assert.equal(r.rates[0].service_name, "Despacho a regiones · por cotizar"); assert.equal(precio(r), 0);
+});
+await t("V59: «a coordinar» dentro de la RM (tarifa no calculable) se llama «Despacho a coordinar con tu ejecutivo»", async () => {
+  // Un peso fuera de la tabla de la zona no devuelve tarifa: se cotiza con el ejecutivo.
+  const r = await call(nuevo, [saco(100000)], "La Florida");
+  if (r.rates.length === 1 && r.rates[0].service_code === "A_COORDINAR") {
+    assert.equal(r.rates[0].service_name, "Despacho a coordinar con tu ejecutivo");
+    assert.equal(r.rates[0].description, "Tu ejecutivo te envía el valor del flete por WhatsApp antes de despachar.");
+  } else assert.ok(r.rates.length === 1, JSON.stringify(r));
 });
 await t("alias de comuna dentro de la RM: «Stgo» y «Santiago Centro» con EPS → tarifa de Santiago", async () => {
   for (const city of ["Stgo", "Santiago Centro"]) {

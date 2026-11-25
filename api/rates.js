@@ -6,7 +6,7 @@
 //    checkout no ofrece despacho y no se puede comprar con despacho en la web.
 // 2. Si NO hay EPS y la comuna es RM → despacho propio por zona y PESO TOTAL (Σ grams × cantidad)
 // 3. Cualquier otro caso (comuna fuera de cobertura, sin comuna, peso desconocido) →
-//    «Despacho a regiones: a coordinar (se cobra aparte)» ($0, lo coordina el ejecutivo) en vez de no devolver nada.
+//    «Despacho a coordinar con tu ejecutivo» (RM) o «Despacho a regiones · por cotizar» (regiones), $0: lo cotiza el ejecutivo.
 //    La comuna sale de destination.city o, si falta, del código postal (RM). Región RM sin comuna ni CP → { rates: [] }.
  
 // ─── TARIFAS EPS (CLP con IVA incluido) ──────────────────────────────────────
@@ -173,16 +173,22 @@ function hasEPS(items) {
   return items.some(esEPS);
 }
 
-// Peso total del carrito en gramos: Σ grams × cantidad. `grams` es el peso de UNA unidad.
-// Si algún artículo no trae peso, el total no es fiable: se devuelve con `incompleto`.
+// Peso por defecto de UNA unidad cuando el producto no tiene peso en Shopify (grams = 0). Así un producto sin peso cargado no manda el
+// despacho de la RM a «a coordinar»: se calcula la tarifa normal de la zona con este peso mínimo. Se ajusta con DEFAULT_UNIT_GRAMS.
+const PESO_MINIMO_UNIDAD = (() => { const n = Number(process.env.DEFAULT_UNIT_GRAMS); return n > 0 ? Math.round(n) : 500; })();
+
+// Peso total del carrito en gramos: Σ grams × cantidad. `grams` es el peso de UNA unidad; una unidad sin peso (grams = 0) pesa el mínimo
+// por defecto y se devuelve en `sinPeso` (para registrar su SKU y que alguien le cargue el peso en Shopify).
 function pesoTotal(items) {
-  let gramos = 0, incompleto = false;
+  let gramos = 0;
+  const sinPeso = [];
   for (const i of items) {
     const g = Number(i.grams), q = Number(i.quantity);
-    if (!(g > 0) || !(q > 0)) { incompleto = true; continue; }
+    if (!(q > 0)) continue;
+    if (!(g > 0)) { sinPeso.push({ sku: i.sku || null, name: i.name || null, variant_id: i.variant_id || null, product_id: i.product_id || null, quantity: q }); gramos += PESO_MINIMO_UNIDAD * q; continue; }
     gramos += g * q;
   }
-  return { gramos, incompleto };
+  return { gramos, sinPeso };
 }
 
 // Nombres de comuna que Shopify o el cliente escriben distinto a como están en las tablas.
@@ -306,16 +312,18 @@ function resolverDestino(destination) {
   return { comuna, rm, rmSinComuna, region };
 }
 
-// Sin tarifa conocida: el despacho se coordina con el ejecutivo (no se deja al cliente sin opción).
-function tarifaACoordinar(motivo) {
+// Sin tarifa que se pueda calcular de verdad: el despacho lo cotiza el ejecutivo (no se deja al cliente sin opción). El nombre depende
+// del destino: dentro de la RM «a coordinar con tu ejecutivo»; en regiones «por cotizar». Nunca «se cobra aparte».
+const DESCRIPCION_A_COORDINAR = "Tu ejecutivo te envía el valor del flete por WhatsApp antes de despachar.";
+function tarifaACoordinar(enRM) {
   return {
-    service_name: "Despacho a regiones: a coordinar (se cobra aparte)",
+    service_name: enRM ? "Despacho a coordinar con tu ejecutivo" : "Despacho a regiones · por cotizar",
     service_code: "A_COORDINAR",
     total_price: "0",
     currency: "CLP",
     min_delivery_date: new Date(Date.now() + 2 * 86400000).toISOString(),
     max_delivery_date: new Date(Date.now() + 7 * 86400000).toISOString(),
-    description: motivo || "Te contactamos para coordinar el despacho y su costo"
+    description: DESCRIPCION_A_COORDINAR
   };
 }
  
@@ -564,15 +572,11 @@ export default async function handler(req, res) {
     // ── CASO 2: Sin EPS, comuna RM → despacho propio por zona y peso total ──
     const zona = getZona(comunaNorm);
     if (zona) {
-      const { gramos, incompleto } = pesoTotal(items);
-      if (gramos <= 0) {
-        // Ningún artículo trae peso: cobrar el primer tramo sería regalar el flete.
-        log("SIN_PESO", { items: items.map(i => ({ product_id: i.product_id, grams: i.grams, quantity: i.quantity })) });
-        return res.status(200).json({ rates: [tarifaACoordinar("Despacho a coordinar con tu ejecutivo")] });
-      }
-      if (incompleto) log("PESO_INCOMPLETO", { gramos, items: items.map(i => ({ product_id: i.product_id, grams: i.grams, quantity: i.quantity })) });
+      const { gramos, sinPeso } = pesoTotal(items);
+      // Producto sin peso en Shopify: se calcula con el peso mínimo por unidad y se registra el SKU para cargarle el peso.
+      if (sinPeso.length > 0) log("SIN_PESO", { peso_minimo_unidad: PESO_MINIMO_UNIDAD, gramos, items: sinPeso });
       const tarifa = calcularTarifaRM(zona, gramos);
-      if (!tarifa) return res.status(200).json({ rates: [tarifaACoordinar()] });
+      if (!tarifa) return res.status(200).json({ rates: [tarifaACoordinar(true)] });
       const zonaLabel = zona === "ZONA1" ? "Zona 1" : zona === "ZONA2" ? "Zona 2" : "Zona 3";
       return res.status(200).json({
         rates: [{
@@ -589,7 +593,7 @@ export default async function handler(req, res) {
 
     // ── CASO 3: Sin EPS y comuna sin zona (regiones, comuna vacía o desconocida) → a coordinar ──
     log("FUERA_DE_COBERTURA");
-    return res.status(200).json({ rates: [tarifaACoordinar()] });
+    return res.status(200).json({ rates: [tarifaACoordinar(Boolean(dest.rm))] });
 
   } catch (err) {
     console.error(err);

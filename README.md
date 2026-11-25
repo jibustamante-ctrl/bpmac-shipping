@@ -42,7 +42,8 @@ POST /admin/api/2024-01/carrier_services.json
 - Shopify envía el carrito al endpoint cuando el cliente llega a shipping.
 - **Planchas/perlas EPS** (`product_type = "Aislación Térmica"` o vendor `ETSA`): tarifa fija por comuna (`TARIFAS_EPS`).
 - **Todo lo demás en la Región Metropolitana** (morteros, adhesivos, sacos, selladores…): despacho propio por zona y **peso total** (Σ `grams` × cantidad; `grams` es el peso de una unidad). Los tramos suben con el peso.
-- **Fuera de cobertura** (regiones sin tarifa, comuna vacía, carrito sin pesos): «Despacho a regiones: a coordinar (se cobra aparte)» ($0), para que el cliente no se quede sin opción y el ejecutivo coordine el costo.
+- **Producto sin peso en Shopify** (grams = 0), dentro de la RM: se calcula la tarifa normal de la zona con un peso mínimo de 500 g por unidad (se ajusta con la variable `DEFAULT_UNIT_GRAMS`) y se registra `SIN_PESO` con el SKU para cargarle el peso. Antes caía a «a coordinar».
+- **Fuera de cobertura** (regiones sin tarifa, comuna vacía): «Despacho a regiones · por cotizar» ($0; dentro de la RM, si la tarifa no se puede calcular: «Despacho a coordinar con tu ejecutivo»), con la descripción «Tu ejecutivo te envía el valor del flete por WhatsApp antes de despachar.», para que el cliente no se quede sin opción y el ejecutivo coordine el costo.
 - La zona sale de la comuna (`destination.city`); el código postal no se usa.
 - Antes de todo se valida el pedido mínimo por etiqueta (`compra-minima-eps`, `pedido-minimo-10`).
 
